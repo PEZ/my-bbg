@@ -14,17 +14,18 @@
 
   clj {:doc "Manage clojure installs. Options: --status, --update, --update-deps-clj, --use-deps-clj, --use-clojure"
        :task (deps-clj-as-clojure/exec! (cli/parse-opts *command-line-args*
-                                                         {:coerce {:status :boolean
-                                                                   :update :boolean
-                                                                   :update-deps-clj :boolean
-                                                                   :use-deps-clj :boolean
-                                                                   :use-clojure :boolean}}))}
+                                                        {:coerce {:status :boolean
+                                                                  :update :boolean
+                                                                  :update-deps-clj :boolean
+                                                                  :use-deps-clj :boolean
+                                                                  :use-clojure :boolean}}))}
 
   config {:doc "Manage config repos. Options: --status, --save"
           :task (config-save/exec! (cli/parse-opts *command-line-args*
                                                    {:coerce {:status :boolean
                                                              :save :boolean}}))}
 
-  java:use {:doc "Switch Java major version. Usage: bbg java:use <major|latest>"
-            :task (java-version/switch! (cli/parse-opts *command-line-args* {:args->opts [:java/version]
-                                                                             :coerce {:java/version :string}}))}}}
+  java {:doc "Manage Java versions. Options: --status, --version <major|latest>"
+        :task (java-version/exec! (cli/parse-opts *command-line-args* {:args->opts [:version]
+                                                                       :coerce {:status :boolean
+                                                                                :version :string}}))}}}

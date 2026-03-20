@@ -86,21 +86,18 @@
 (defn- sdk-cmd [subcmd identifier]
   (str "sdk " subcmd " java " identifier))
 
-(defn switch! [{:java/keys [version]}]
-  (when-not (fs/exists? sdkman-java-dir)
-    (println "✗ SDKMAN not found at" sdkman-java-dir)
-    (System/exit 1))
-  (when-not version
-    (let [installed (installed-identifiers)
-          current (current-identifier)]
-      (println (str "Current: " current " (java " (parse-major current) ")"))
-      (println)
-      (println "Installed:")
-      (doseq [id installed]
-        (println (str "  " (if (= id current) "→ " "  ") id)))
-      (println)
-      (println "Usage: bbg java:use <major-version|latest>"))
-    (System/exit 0))
+(defn status! []
+  (let [installed (installed-identifiers)
+        current (current-identifier)]
+    (println (str "Current: " current " (java " (parse-major current) ")"))
+    (println)
+    (println "Installed:")
+    (doseq [id installed]
+      (println (str "  " (if (= id current) "→ " "  ") id)))
+    (println)
+    (println "Usage: bbg java <major-version|latest>")))
+
+(defn switch! [{:keys [version]}]
   (let [installed (installed-identifiers)
         major (if (= version "latest")
                 (highest-installed-major installed)
@@ -123,3 +120,13 @@
                 (println " " (sdk-cmd "install" id)))
             (do (println (str "✗ No java " major " found in SDKMAN"))
                 (System/exit 1)))))))
+
+
+(defn exec! [{:keys [status version] :as opts}]
+  (when-not (fs/exists? sdkman-java-dir)
+    (println "✗ SDKMAN not found at" sdkman-java-dir)
+    (System/exit 1))
+  (cond
+    status (status!)
+    version (switch! opts)
+    :else (status!)))
