@@ -12,12 +12,13 @@
   loc {:doc "Count lines of code (excludes generated files, markdown, vendor)"
        :task (loc/count! {:cwd cwd})}
 
-  deps-clj {:doc "Manage deps.clj. Flags: --status, --update, --use, --unuse"
-            :task (deps-clj-as-clojure/exec! (cli/parse-opts *command-line-args*
-                                                              {:coerce {:status :boolean
-                                                                        :update :boolean
-                                                                        :use :boolean
-                                                                        :unuse :boolean}}))}
+  clj {:doc "Manage Clojure. Flags: --status, --update, --update-deps-clj, --use-deps-clj, --use-clojure"
+       :task (deps-clj-as-clojure/exec! (cli/parse-opts *command-line-args*
+                                                         {:coerce {:status :boolean
+                                                                   :update :boolean
+                                                                   :update-deps-clj :boolean
+                                                                   :use-deps-clj :boolean
+                                                                   :use-clojure :boolean}}))}
 
   config:save {:doc "git add, commit, and push all config dirs"
                :task (config-save/save!)}

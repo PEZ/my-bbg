@@ -32,7 +32,7 @@
                                     {:out :string :err :string})]
       (some->> out str/trim (re-find #"[\d.]+$")))))
 
-(defn update! []
+(defn update-deps-clj! []
   (let [{:keys [version assets]} (latest-release)
         asset-key (asset-name version)
         download-url (get assets asset-key)]
@@ -57,9 +57,14 @@
       (fs/set-posix-file-permissions (binary-path) "rwxr-xr-x")
       (println (str "Installed to " (binary-path))))))
 
-(defn use! [_opts]
+(defn update-clojure! []
+  (println "Updating clojure via Homebrew...")
+  @(p/process ["brew" "upgrade" "clojure/tools/clojure"]
+              {:inherit true}))
+
+(defn use-deps-clj! []
   (when-not (fs/exists? (binary-path))
-    (println (str "Error: " (binary-path) " not found. Run deps-clj:update first."))
+    (println (str "Error: " (binary-path) " not found. Run bbg clj --update-deps-clj first."))
     (System/exit 1))
   (doseq [link-name ["clojure" "clj"]]
     (let [link-path (fs/path bin-dir link-name)]
@@ -68,7 +73,7 @@
       (fs/create-sym-link link-path (binary-path))
       (println (str "Linked " link-path " -> " (binary-path))))))
 
-(defn unuse! [_opts]
+(defn use-clojure! []
   (doseq [link-name ["clojure" "clj"]]
     (let [link-path (fs/path bin-dir link-name)]
       (if (and (fs/exists? link-path) (fs/sym-link? link-path))
@@ -80,9 +85,21 @@
   (some->> @(p/process [(str path) "--version"] {:out :string :err :string})
            :out str/trim (re-find #"[\d.]+$")))
 
+(defn- version-str [current latest]
+  (if (= current latest)
+    (str current " (latest)")
+    (str current " (latest: " latest ")")))
+
+(defn- latest-clojure-version []
+  (-> @(p/process ["brew" "info" "--json=v2" "clojure/tools/clojure"]
+                  {:out :string :err :string})
+      :out (json/parse-string true) :formulae first :versions :stable))
+
 (defn status! []
   (let [deps-clj-exists? (fs/exists? (binary-path))
         deps-clj-real (when deps-clj-exists? (str (fs/real-path (binary-path))))
+        latest-deps-clj (:version (latest-release))
+        latest-clj (latest-clojure-version)
         all-clojures (->> @(p/process ["which" "-a" "clojure"] {:out :string :err :string})
                           :out str/trim str/split-lines
                           (remove str/blank?))
@@ -95,19 +112,20 @@
     (println (str (if active-is-deps-clj? "* " "  ")
                   "deps-clj: "
                   (if deps-clj-exists?
-                    (str (current-version) ", " (binary-path))
+                    (str (version-str (current-version) latest-deps-clj) ", " (binary-path))
                     "not installed")))
     (println (str (if (and (seq all-clojures) (not active-is-deps-clj?)) "* " "  ")
                   "clojure:  "
                   (if system-clojure
-                    (str (version-at system-clojure) ", " system-clojure)
+                    (str (version-str (version-at system-clojure) latest-clj) ", " system-clojure)
                     "not found")))))
 
-(defn exec! [{:keys [update use unuse status]}]
+(defn exec! [{:keys [status update update-deps-clj use-deps-clj use-clojure]}]
   (cond
     status (status!)
-    update (update!)
-    use (use! nil)
-    unuse (unuse! nil)
-    :else (do (println "Usage: bbg deps-clj --status | --update | --use | --unuse")
+    update (update-clojure!)
+    update-deps-clj (update-deps-clj!)
+    use-deps-clj (use-deps-clj!)
+    use-clojure (use-clojure!)
+    :else (do (println "Usage: bbg clj --status | --update | --update-deps-clj | --use-deps-clj | --use-clojure")
               (System/exit 1))))
