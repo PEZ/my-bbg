@@ -86,41 +86,40 @@
 (defn- sdk-cmd [subcmd identifier]
   (str "sdk " subcmd " java " identifier))
 
-(defn switch! [{:keys [args]}]
+(defn switch! [{:java/keys [version]}]
   (when-not (fs/exists? sdkman-java-dir)
     (println "✗ SDKMAN not found at" sdkman-java-dir)
     (System/exit 1))
-  (let [requested (first args)]
-    (when-not requested
-      (let [installed (installed-identifiers)
-            current (current-identifier)]
-        (println (str "Current: " current " (java " (parse-major current) ")"))
-        (println)
-        (println "Installed:")
-        (doseq [id installed]
-          (println (str "  " (if (= id current) "→ " "  ") id)))
-        (println)
-        (println "Usage: bbg java:use <major-version|latest>"))
-      (System/exit 0))
+  (when-not version
     (let [installed (installed-identifiers)
-          major (if (= requested "latest")
-                  (highest-installed-major installed)
-                  (parse-long requested))]
-      (when-not major
-        (println (str "✗ Invalid version: " requested))
-        (System/exit 1))
-      (let [current (current-identifier)]
-        (when (= major (parse-major current))
-          (println (str "Already on java " major " (" current ")"))
-          (System/exit 0)))
-      (if-let [id (best-installed major installed)]
-        (do (println (str "Found installed: " id))
-            (println)
-            (println (sdk-cmd "use" id)))
-        (do (println (str "No java " major " installed. Looking up available..."))
-            (if-let [id (best-available major)]
-              (do (println (str "Best available: " id))
-                  (println)
-                  (println (sdk-cmd "install" id)))
-              (do (println (str "✗ No java " major " found in SDKMAN"))
-                  (System/exit 1))))))))
+          current (current-identifier)]
+      (println (str "Current: " current " (java " (parse-major current) ")"))
+      (println)
+      (println "Installed:")
+      (doseq [id installed]
+        (println (str "  " (if (= id current) "→ " "  ") id)))
+      (println)
+      (println "Usage: bbg java:use <major-version|latest>"))
+    (System/exit 0))
+  (let [installed (installed-identifiers)
+        major (if (= version "latest")
+                (highest-installed-major installed)
+                (parse-long version))]
+    (when-not major
+      (println (str "✗ Invalid version: " version))
+      (System/exit 1))
+    (let [current (current-identifier)]
+      (when (= major (parse-major current))
+        (println (str "Already on java " major " (" current ")"))
+        (System/exit 0)))
+    (if-let [id (best-installed major installed)]
+      (do (println (str "Found installed: " id))
+          (println "Command line to execute:")
+          (println " " (sdk-cmd "use" id)))
+      (do (println (str "No java " major " installed. Looking up available..."))
+          (if-let [id (best-available major)]
+            (do (println (str "Best available: " id))
+                (println "Command line to execute:")
+                (println " " (sdk-cmd "install" id)))
+            (do (println (str "✗ No java " major " found in SDKMAN"))
+                (System/exit 1)))))))

@@ -10,22 +10,23 @@
   :enter (def cwd (:cwd (cli/parse-opts *command-line-args*)))
 
   hello {:doc "Say hello"
-         :task (println "Hello")}
+         :task loc/hello}
 
   loc {:doc "Count lines of code (excludes generated files, markdown, vendor)"
        :task (loc/count! {:cwd cwd})}
 
   deps-clj:update {:doc "Download/update deps.clj binary to ~/binaries"
-                   :task (deps-clj/update! nil)}
+                   :task (deps-clj-as-clojure/update!)}
 
   deps-clj:use {:doc "Symlink deps.clj as clojure and clj in ~/bin"
-                :task (deps-clj/use! nil)}
+                :task (deps-clj-as-clojure/use!)}
 
   deps-clj:unuse {:doc "Remove clojure and clj symlinks from ~/bin"
-                  :task (deps-clj/unuse! nil)}
+                  :task (deps-clj-as-clojure/unuse!)}
 
   config:save {:doc "git add, commit, and push all config dirs"
-               :task (config-save/save! nil)}
+               :task (config-save/save!)}
 
   java:use {:doc "Switch Java major version. Usage: bbg java:use <major|latest>"
-            :task (java-version/switch! (cli/parse-args *command-line-args*))}}}
+            :task (java-version/switch! (cli/parse-opts *command-line-args* {:args->opts [:java/version]
+                                                                             :coerce {:java/version :string}}))}}}

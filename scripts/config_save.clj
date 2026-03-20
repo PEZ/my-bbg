@@ -31,7 +31,7 @@
 (defn- git! [dir & args]
   (apply p/shell {:dir dir} "git" args))
 
-(defn save! [_opts]
+(defn save! []
   (let [repos (mapv repo-status config-dirs)]
     (doseq [{:keys [dir branch dirty?]} repos]
       (println (str "\n==> " dir))

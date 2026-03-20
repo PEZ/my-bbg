@@ -32,7 +32,7 @@
                                     {:out :string :err :string})]
       (some->> out str/trim (re-find #"[\d.]+$")))))
 
-(defn update! [_opts]
+(defn update! []
   (let [{:keys [version assets]} (latest-release)
         asset-key (asset-name version)
         download-url (get assets asset-key)]
