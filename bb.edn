@@ -12,7 +12,7 @@
   loc {:doc "Count lines of code (excludes generated files, markdown, vendor)"
        :task (loc/count! {:cwd cwd})}
 
-  clj {:doc "Manage Clojure. Flags: --status, --update, --update-deps-clj, --use-deps-clj, --use-clojure"
+  clj {:doc "Manage clojure installs. Options: --status, --update, --update-deps-clj, --use-deps-clj, --use-clojure"
        :task (deps-clj-as-clojure/exec! (cli/parse-opts *command-line-args*
                                                          {:coerce {:status :boolean
                                                                    :update :boolean
@@ -20,8 +20,10 @@
                                                                    :use-deps-clj :boolean
                                                                    :use-clojure :boolean}}))}
 
-  config:save {:doc "git add, commit, and push all config dirs"
-               :task (config-save/save!)}
+  config {:doc "Manage config repos. Options: --status, --save"
+          :task (config-save/exec! (cli/parse-opts *command-line-args*
+                                                   {:coerce {:status :boolean
+                                                             :save :boolean}}))}
 
   java:use {:doc "Switch Java major version. Usage: bbg java:use <major|latest>"
             :task (java-version/switch! (cli/parse-opts *command-line-args* {:args->opts [:java/version]

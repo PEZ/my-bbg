@@ -14,15 +14,27 @@
 ;; ============================================================
 
 (defn- git-out [dir & args]
-  (str/trim (:out (apply p/shell {:dir dir :out :string} "git" args))))
+  (str/trim (:out (apply p/shell {:dir dir :out :string :err :string} "git" args))))
+
+(defn- unpushed-count [dir]
+  (try
+    (parse-long (git-out dir "rev-list" "@{u}..HEAD" "--count"))
+    (catch Exception _ nil)))
 
 (defn- repo-status [dir]
-  {:dir    dir
-   :branch (git-out dir "rev-parse" "--abbrev-ref" "HEAD")
-   :dirty? (not (str/blank? (git-out dir "status" "--porcelain")))})
+  {:dir      dir
+   :dirty?   (not (str/blank? (git-out dir "status" "--porcelain")))
+   :unpushed (unpushed-count dir)})
 
 (defn- commit-msg []
   (str "chore: save config " (-> (java.time.Instant/now) str (subs 0 16))))
+
+(defn- status-label [{:keys [dirty? unpushed]}]
+  (cond
+    dirty?                          "uncommitted"
+    (and unpushed (pos? unpushed))  (str unpushed " unpushed")
+    (nil? unpushed)                 "no upstream"
+    :else                           "clean"))
 
 ;; ============================================================
 ;; Side-effecting edge
@@ -33,11 +45,24 @@
 
 (defn save! []
   (let [repos (mapv repo-status config-dirs)]
-    (doseq [{:keys [dir branch dirty?]} repos]
+    (doseq [{:keys [dir dirty?]} repos]
       (println (str "\n==> " dir))
       (if dirty?
-        (let [msg (commit-msg)]
+        (let [msg    (commit-msg)
+              branch (git-out dir "rev-parse" "--abbrev-ref" "HEAD")]
           (git! dir "add" "--all")
           (git! dir "commit" "-m" msg)
           (git! dir "push" "origin" branch))
         (println "Nothing to commit.")))))
+
+(defn status! []
+  (let [statuses (mapv repo-status config-dirs)
+        max-len  (apply max (map #(count (:dir %)) statuses))]
+    (doseq [s statuses]
+      (println (format (str "%-" max-len "s  %s") (:dir s) (status-label s))))))
+
+(defn exec! [{:keys [status save]}]
+  (cond
+    status (status!)
+    save   (save!)
+    :else  (println "Usage: bbg config --status | --save")))
