@@ -64,5 +64,5 @@
 (defn exec! [{:keys [status save]}]
   (cond
     status (status!)
-    save   (save!)
-    :else  (println "Usage: bbg config --status | --save")))
+    save   (do (save!) (status!))
+    :else  (status!)))

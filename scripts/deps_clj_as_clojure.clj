@@ -122,10 +122,9 @@
 
 (defn exec! [{:keys [status update update-deps-clj use-deps-clj use-clojure]}]
   (cond
-    status (status!)
-    update (update-clojure!)
-    update-deps-clj (update-deps-clj!)
-    use-deps-clj (use-deps-clj!)
-    use-clojure (use-clojure!)
-    :else (do (println "Usage: bbg clj --status | --update | --update-deps-clj | --use-deps-clj | --use-clojure")
-              (System/exit 1))))
+    status          (status!)
+    update          (do (update-clojure!) (status!))
+    update-deps-clj (do (update-deps-clj!) (status!))
+    use-deps-clj    (do (use-deps-clj!) (status!))
+    use-clojure     (do (use-clojure!) (status!))
+    :else           (status!)))
