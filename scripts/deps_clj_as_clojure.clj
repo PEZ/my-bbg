@@ -75,3 +75,39 @@
         (do (fs/delete link-path)
             (println (str "Removed " link-path)))
         (println (str "Skipping " link-path " (not a symlink)"))))))
+
+(defn- version-at [path]
+  (some->> @(p/process [(str path) "--version"] {:out :string :err :string})
+           :out str/trim (re-find #"[\d.]+$")))
+
+(defn status! []
+  (let [deps-clj-exists? (fs/exists? (binary-path))
+        deps-clj-real (when deps-clj-exists? (str (fs/real-path (binary-path))))
+        all-clojures (->> @(p/process ["which" "-a" "clojure"] {:out :string :err :string})
+                          :out str/trim str/split-lines
+                          (remove str/blank?))
+        system-clojure (first (remove #(and deps-clj-real
+                                            (= (str (fs/real-path %)) deps-clj-real))
+                                      all-clojures))
+        active-is-deps-clj? (and deps-clj-real
+                                 (first all-clojures)
+                                 (= (str (fs/real-path (first all-clojures))) deps-clj-real))]
+    (println (str (if active-is-deps-clj? "* " "  ")
+                  "deps-clj: "
+                  (if deps-clj-exists?
+                    (str (current-version) ", " (binary-path))
+                    "not installed")))
+    (println (str (if (and (seq all-clojures) (not active-is-deps-clj?)) "* " "  ")
+                  "clojure:  "
+                  (if system-clojure
+                    (str (version-at system-clojure) ", " system-clojure)
+                    "not found")))))
+
+(defn exec! [{:keys [update use unuse status]}]
+  (cond
+    status (status!)
+    update (update!)
+    use (use! nil)
+    unuse (unuse! nil)
+    :else (do (println "Usage: bbg deps-clj --status | --update | --use | --unuse")
+              (System/exit 1))))
