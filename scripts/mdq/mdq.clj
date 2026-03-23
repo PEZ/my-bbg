@@ -275,19 +275,20 @@
                                     (<= lo (:heading-level node) hi))))
                            (fn [node]
                              (and (= :heading (:type node))
-                                  (<= (:heading-level node) level))))]
-    (loop [remaining nodes, sections [], current nil]
-      (if-not (seq remaining)
-        (if current (conj sections current) sections)
-        (let [node (first remaining)]
-          (if (matches-heading? node)
-            (recur (rest remaining)
-                   (if current (conj sections current) sections)
-                   {:heading node :body []})
-            (if current
-              (recur (rest remaining) sections
-                     (update current :body conj node))
-              (recur (rest remaining) sections nil))))))))
+                                  (<= (:heading-level node) level))))
+        {:keys [sections current]}
+        (reduce (fn [{:keys [sections current]} node]
+                  (if (matches-heading? node)
+                    {:sections (cond-> sections current (conj current))
+                     :current {:heading node :body []}}
+                    (if current
+                      {:sections sections
+                       :current (update current :body conj node)}
+                      {:sections sections
+                       :current nil})))
+                {:sections [] :current nil}
+                nodes)]
+    (cond-> sections current (conj current))))
 
 (defn section-filter [{:keys [matcher] :as selector} nodes]
   (let [sections (slice-sections selector nodes)]
@@ -299,10 +300,15 @@
          (mapcat (fn [{:keys [heading body]}]
                    (cons heading body))))))
 
+(defn walk-ast
+  "Lazy depth-first pre-order traversal of AST nodes."
+  [nodes]
+  (tree-seq (fn [n] (and (map? n) (seq (:content n))))
+            :content
+            {:type :root :content nodes}))
+
 (defn collect-nodes-deep [types nodes]
-  (->> (tree-seq (fn [n] (and (map? n) (seq (:content n))))
-                 :content
-                 {:type :root :content nodes})
+  (->> (walk-ast nodes)
        (filterv #(contains? types (:type %)))))
 
 (defn list-filter [{:keys [list-kind matcher]} nodes]
@@ -335,38 +341,47 @@
       (= :checked task-kind) (filter #(get-in % [:attrs :checked]))
       matcher (filter #(text-matches? matcher (md/node->text %))))))
 
-(defn blockquote-filter [{:keys [matcher]} nodes]
-  (let [bqs (collect-nodes-deep #{:blockquote} nodes)]
-    (cond->> bqs
-      matcher (filter #(text-matches? matcher (md/node->text %))))))
 
-(defn code-filter [{:keys [language-matcher matcher]} nodes]
-  (let [blocks (collect-nodes-deep #{:code} nodes)]
-    (cond->> blocks
-      language-matcher (filter #(text-matches? language-matcher (or (:language %) "")))
-      matcher (filter #(text-matches? matcher (apply str (map :text (:content %))))))))
 
-(defn paragraph-filter [{:keys [matcher]} nodes]
-  (let [paras (collect-nodes-deep #{:paragraph} nodes)]
-    (cond->> paras
-      matcher (filter #(text-matches? matcher (md/node->text %))))))
 
-(defn link-filter [{:keys [matcher url-matcher]} nodes]
-  (let [links (collect-nodes-deep #{:link} nodes)]
-    (cond->> links
-      matcher (filter #(text-matches? matcher (md/node->text %)))
-      url-matcher (filter #(text-matches? url-matcher (get-in % [:attrs :href] ""))))))
 
-(defn image-filter [{:keys [matcher url-matcher]} nodes]
-  (let [images (collect-nodes-deep #{:image} nodes)]
-    (cond->> images
-      matcher (filter #(text-matches? matcher (md/node->text %)))
-      url-matcher (filter #(text-matches? url-matcher (get-in % [:attrs :src] ""))))))
 
-(defn html-filter [{:keys [matcher]} nodes]
-  (let [html-blocks (collect-nodes-deep #{:html-block :html-inline} nodes)]
-    (cond->> html-blocks
-      matcher (filter #(text-matches? matcher (apply str (map :text (:content %))))))))
+
+
+
+
+
+
+
+(def ^:private simple-filter-specs
+  {:blockquote {:node-pred #(= :blockquote (:type %))
+                :preds [[:matcher md/node->text]]}
+   :code {:node-pred #(= :code (:type %))
+          :preds [[:language-matcher #(or (:language %) "")]
+                  [:matcher #(str/join (keep :text (:content %)))]]}
+   :paragraph {:node-pred #(= :paragraph (:type %))
+               :preds [[:matcher md/node->text]]}
+   :link {:node-pred #(= :link (:type %))
+          :preds [[:matcher md/node->text]
+                  [:url-matcher #(get-in % [:attrs :href] "")]]}
+   :image {:node-pred #(= :image (:type %))
+           :preds [[:matcher md/node->text]
+                   [:url-matcher #(get-in % [:attrs :src] "")]]}
+   :html {:node-pred #(#{:html-block :html-inline} (:type %))
+          :preds [[:matcher #(str/join (keep :text (:content %)))]]}})
+
+(defn- simple-filter [selector nodes]
+  (let [{:keys [node-pred preds]} (simple-filter-specs (:type selector))
+        xform (apply comp
+                     (concat
+                      [(filter #(and (map? %) (node-pred %)))]
+                      (keep (fn [[selector-key text-fn]]
+                              (when-let [matcher (get selector selector-key)]
+                                (filter #(text-matches? matcher (text-fn %)))))
+                            preds)))]
+    (into [] xform (walk-ast nodes))))
+
+
 
 (defn front-matter-filter [{:keys [format matcher]} nodes]
   (let [fm-nodes (filter #(= :front-matter (:type %)) nodes)]
@@ -405,39 +420,41 @@
           :when (seq col-idxs)]
       (rebuild-table table col-idxs matched-rows))))
 
+(def ^:private complex-filter-fns
+  {:section section-filter
+   :list-item list-filter
+   :task task-filter
+   :front-matter front-matter-filter
+   :table table-filter})
+
 (defn selector->filter-fn [selector]
-  (case (:type selector)
-    :section (fn [nodes] (section-filter selector nodes))
-    :list-item (fn [nodes] (list-filter selector nodes))
-    :task (fn [nodes] (task-filter selector nodes))
-    :blockquote (fn [nodes] (blockquote-filter selector nodes))
-    :code (fn [nodes] (code-filter selector nodes))
-    :paragraph (fn [nodes] (paragraph-filter selector nodes))
-    :link (fn [nodes] (link-filter selector nodes))
-    :image (fn [nodes] (image-filter selector nodes))
-    :html (fn [nodes] (html-filter selector nodes))
-    :front-matter (fn [nodes] (front-matter-filter selector nodes))
-    :table (fn [nodes] (table-filter selector nodes))
-    (throw (ex-info (str "Unknown selector type: " (:type selector))
-                    {:selector selector}))))
+  (let [selector-type (:type selector)]
+    (cond
+      (contains? simple-filter-specs selector-type)
+      (fn [nodes] (simple-filter selector nodes))
+
+      (contains? complex-filter-fns selector-type)
+      (fn [nodes] ((complex-filter-fns selector-type) selector nodes))
+
+      :else
+      (throw (ex-info (str "Unknown selector type: " selector-type)
+                      {:selector selector})))))
 
 (defn apply-replacements [results selectors]
-  (let [replacements (->> selectors
-                          (map :matcher)
-                          (filter map?)
-                          (map :replace)
-                          (filter some?))]
-    (if (empty? replacements)
-      results
-      (reduce (fn [nodes {:keys [pattern replacement]}]
-                (walk/postwalk
-                 (fn [node]
-                   (if (and (map? node) (= :text (:type node)))
-                     (update node :text #(str/replace % pattern replacement))
-                     node))
-                 nodes))
-              results
-              replacements))))
+  (let [replacements (into [] (keep #(-> % :matcher :replace)) selectors)]
+    (if (seq replacements)
+      (let [text-xf (apply comp
+                           (reverse
+                            (map (fn [{:keys [pattern replacement]}]
+                                   #(str/replace % pattern replacement))
+                                 replacements)))]
+        (walk/postwalk
+         (fn [node]
+           (if (and (map? node) (= :text (:type node)))
+             (update node :text text-xf)
+             node))
+         results))
+      results)))
 
 (defn run-pipeline [nodes selector-str]
   (let [segments (split-pipeline selector-str)
@@ -517,6 +534,9 @@
     "center" ":---:"
     "---"))
 
+(defn- content-text [node]
+  (str/join (keep :text (:content node))))
+
 (defn emit-node [node]
   (case (:type node)
     :heading (str (apply str (repeat (:heading-level node) "#")) " "
@@ -539,10 +559,10 @@
                     (str/join "\n  " (map emit-node (:content node))))
     :blockquote (str/join "\n" (map #(str "> " (emit-node %)) (:content node)))
     :code (str "```" (or (:language node) "") "\n"
-               (apply str (map #(or (:text %) "") (:content node)))
+               (content-text node)
                "\n```")
     :ruler "---"
-    :html-block (apply str (map #(or (:text %) "") (:content node)))
+    :html-block (content-text node)
     :link (str "[" (emit-inline-str (:content node)) "](" (get-in node [:attrs :href]) ")")
     :image (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")")
     :table (let [[head body] (:content node)
@@ -569,7 +589,10 @@
   (walk/postwalk
    (fn [x]
      (if (map? x)
-       (into {} (map (fn [[k v]] [(if (keyword? k) (kebab->snake k) k) v]) x))
+       (reduce-kv (fn [acc k v]
+                    (assoc acc (if (keyword? k) (kebab->snake k) k) v))
+                  {}
+                  x)
        x))
    items))
 
@@ -630,8 +653,7 @@
 (defn- emit-inline-str [content]
   (apply str (map emit-inline content)))
 
-(defn- content-text [node]
-  (apply str (map #(or (:text %) "") (:content node))))
+
 
 (declare nodes->items)
 
@@ -705,7 +727,7 @@
     {:thematic-break nil}
 
     (:html-block :html-inline)
-    {:html (apply str (map #(or (:text %) "") (:content node)))}
+    {:html (content-text node)}
 
     :front-matter
     {:front-matter {:format (name (:format node))
@@ -755,19 +777,21 @@
             (recur (next remaining) (conj result item) nil)))))))
 
 (defn format-output [nodes opts]
-  (let [items (nodes->items nodes)
-        footnotes (when-let [fns (:footnotes (:ast opts))]
-                    (when (seq fns) fns))
-        result (cond-> {:items items}
-                 footnotes (assoc :footnotes footnotes))]
-    (case (keyword (or (:output opts) "markdown"))
+  (let [output-kw (keyword (or (:output opts) "markdown"))]
+    (case output-kw
       :markdown (emit-markdown nodes opts)
-      :json (json/generate-string
-             (cond-> {:items (items->json-data items)}
-               footnotes (assoc :footnotes (items->json-data footnotes)))
-             {:pretty true})
-      :edn (with-out-str (pp/pprint result))
-      :plain (str/join "\n\n" (map md/node->text nodes)))))
+      :plain (str/join "\n\n" (map md/node->text nodes))
+      (let [items (nodes->items nodes)
+            footnotes (when-let [fns (:footnotes (:ast opts))]
+                        (when (seq fns) fns))
+            result (cond-> {:items items}
+                     footnotes (assoc :footnotes footnotes))]
+        (case output-kw
+          :json (json/generate-string
+                 (cond-> {:items (items->json-data items)}
+                   footnotes (assoc :footnotes (items->json-data footnotes)))
+                 {:pretty true})
+          :edn (with-out-str (pp/pprint result)))))))
 
 (defn pre-process-front-matter [input]
   (let [lines (str/split-lines input)]

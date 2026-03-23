@@ -233,6 +233,24 @@
     (testing "filter by src"
       (is (= 1 (count (mdq/run-pipeline nodes "![](banner)")))))))
 
+(deftest simple-filter-registry-test
+  (let [nodes (:content (md/parse "[Google](https://google.com)\n\n[GitHub](https://github.com)\n\n```clojure\n(+ 1 2)\n```\n\n```python\nprint('hi')\n```"))]
+    (testing "walk-ast traverses root then descendants in pre-order"
+      (is (= [:root :paragraph :link :text :paragraph :link :text :code :text :code :text]
+             (mapv :type (mdq/walk-ast nodes)))))
+    (testing "shared simple-filter handles link text and url matchers"
+      (let [simple-filter #'mdq/simple-filter]
+        (is (= 1 (count (simple-filter (mdq/parse-selector "[](github)") nodes)))
+            "URL matcher should narrow link matches")
+        (is (= 1 (count (simple-filter (mdq/parse-selector "[Google]()") nodes)))
+            "Text matcher should narrow link matches")))
+    (testing "shared simple-filter handles code language and body matchers"
+      (let [simple-filter #'mdq/simple-filter]
+        (is (= 1 (count (simple-filter (mdq/parse-selector "```clojure") nodes)))
+            "Language matcher should narrow code matches")
+        (is (= 1 (count (simple-filter (mdq/parse-selector "``` * (+ 1 2)") nodes)))
+            "Body matcher should narrow code matches")))))
+
 (deftest parse-args-test
   (testing "basic selector"
     (is (= "# hello" (:selector (mdq/parse-args ["# hello"])))))
