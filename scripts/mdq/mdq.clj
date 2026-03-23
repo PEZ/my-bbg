@@ -813,6 +813,10 @@
       :else
       {:front-matter nil :body input})))
 
+;; Manual arg parsing because selectors like "- foo" start with dash,
+;; which babashka.cli misinterprets as combined short flags.
+;; The :else clause strips --cwd (injected by the bbg wrapper) from
+;; the selector since it grabs all remaining args at once.
 (defn parse-args [args]
   (loop [remaining args
          opts {}]
@@ -832,14 +836,22 @@
           (or (= "-h" arg) (= "--help" arg))
           (recur (rest remaining) (assoc opts :help true))
 
-          (or (= "--link_format" arg) (= "--link-format" arg))
+          (= "--link-format" arg)
           (recur (drop 2 remaining) (assoc opts :link-format (second remaining)))
 
-          (or (= "--link-placement" arg) (= "--link_placement" arg))
+          (= "--link-placement" arg)
           (recur (drop 2 remaining) (assoc opts :link-placement (second remaining)))
 
+          (= "--cwd" arg)
+          (recur (drop 2 remaining) opts)
+
           :else
-          (assoc opts :selector (str/join " " remaining)))))))
+          (let [selector-args (loop [r remaining, acc []]
+                                (cond
+                                  (empty? r) acc
+                                  (= "--cwd" (first r)) (recur (drop 2 r) acc)
+                                  :else (recur (rest r) (conj acc (first r)))))]
+            (assoc opts :selector (str/join " " selector-args))))))))
 
 (defn exec! [args]
   (let [opts (parse-args args)]
@@ -848,7 +860,7 @@
       (println)
       (println "Options:")
       (println "  -o, --output FORMAT       Output format: markdown (default), json, edn, plain")
-      (println "  --link_format FORMAT      Link format: reference (default), inline")
+      (println "  --link-format FORMAT      Link format: reference (default), inline")
       (println "  --link-placement PLACE    Link placement: section (default), doc")
       (println "  -q, --quiet               Exit 0 if found, non-0 otherwise (no output)")
       (println "  -h, --help                Show this help")

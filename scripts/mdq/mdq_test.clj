@@ -498,14 +498,14 @@
 
 (deftest cli-link-format-test
   (testing "parse link format flag"
-    (let [opts (mdq/parse-args ["--link_format" "reference" "# test"])]
+    (let [opts (mdq/parse-args ["--link-format" "reference" "# test"])]
       (is (= "reference" (:link-format opts))))
     (let [opts (mdq/parse-args ["--link-format" "inline" "# test"])]
       (is (= "inline" (:link-format opts)))))
   (testing "parse link placement flag"
     (let [opts (mdq/parse-args ["--link-placement" "doc" "# test"])]
       (is (= "doc" (:link-placement opts))))
-    (let [opts (mdq/parse-args ["--link_placement" "section" "# test"])]
+    (let [opts (mdq/parse-args ["--link-placement" "section" "# test"])]
       (is (= "section" (:link-placement opts))))))
 
 (deftest reference-link-output-test
