@@ -311,23 +311,24 @@
   (->> (walk-ast nodes)
        (filterv #(contains? types (:type %)))))
 
+(defn- extract-list-items [list-node]
+  (let [ordered? (= :numbered-list (:type list-node))
+        start (or (get-in list-node [:attrs :start]) 1)]
+    (->> (:content list-node)
+         (map-indexed
+          (fn [i item]
+            (if ordered?
+              (assoc-in item [:attrs :order] (+ start i))
+              item)))
+         (filter #(= :list-item (:type %))))))
+
 (defn list-filter [{:keys [list-kind matcher]} nodes]
   (let [type-set (case list-kind
                    :unordered #{:bullet-list}
                    :ordered #{:numbered-list}
                    #{:bullet-list :numbered-list})
-        all-lists (collect-nodes-deep type-set nodes)
-        items (->> all-lists
-                   (mapcat (fn [list-node]
-                             (let [ordered? (= :numbered-list (:type list-node))
-                                   start (or (get-in list-node [:attrs :start]) 1)]
-                               (map-indexed
-                                (fn [i item]
-                                  (if ordered?
-                                    (assoc-in item [:attrs :order] (+ start i))
-                                    item))
-                                (:content list-node)))))
-                   (filter #(= :list-item (:type %))))]
+        items (->> (collect-nodes-deep type-set nodes)
+                   (mapcat extract-list-items))]
     (cond->> items
       matcher (filter #(text-matches? matcher (md/node->text %))))))
 
@@ -340,18 +341,6 @@
       (= :unchecked task-kind) (filter #(not (get-in % [:attrs :checked])))
       (= :checked task-kind) (filter #(get-in % [:attrs :checked]))
       matcher (filter #(text-matches? matcher (md/node->text %))))))
-
-
-
-
-
-
-
-
-
-
-
-
 
 (def ^:private simple-filter-specs
   {:blockquote {:node-pred #(= :blockquote (:type %))
@@ -381,10 +370,8 @@
                             preds)))]
     (into [] xform (walk-ast nodes))))
 
-
-
 (defn front-matter-filter [{:keys [format matcher]} nodes]
-  (let [fm-nodes (filter #(= :front-matter (:type %)) nodes)]
+  (let [fm-nodes (collect-nodes-deep #{:front-matter} nodes)]
     (cond->> fm-nodes
       format (filter #(= format (:format %)))
       matcher (filter #(text-matches? matcher (or (:raw %) ""))))))
@@ -653,8 +640,6 @@
 (defn- emit-inline-str [content]
   (apply str (map emit-inline content)))
 
-
-
 (declare nodes->items)
 
 (defn node->item [node]
@@ -821,10 +806,7 @@
       :else
       {:front-matter nil :body input})))
 
-;; Manual arg parsing because selectors like "- foo" start with dash,
-;; which babashka.cli misinterprets as combined short flags.
-;; The :else clause strips --cwd (injected by the bbg wrapper) from
-;; the selector since it grabs all remaining args at once.
+;; Manual arg parsing because selectors like "- foo" start with dash
 (defn parse-args [args]
   (loop [remaining args
          opts {}]
