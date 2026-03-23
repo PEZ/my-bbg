@@ -300,14 +300,15 @@
                    (cons heading body))))))
 
 (defn collect-nodes-deep [types nodes]
-  (let [results (atom [])]
-    (walk/postwalk
-     (fn [node]
-       (when (and (map? node) (contains? types (:type node)))
-         (swap! results conj node))
-       node)
-     nodes)
-    @results))
+  (let [collect (fn collect [node]
+                  (if (map? node)
+                    (let [child-results (mapcat collect (:content node))]
+                      (if (contains? types (:type node))
+                        (concat child-results [node])
+                        child-results))
+                    (when (sequential? node)
+                      (mapcat collect node))))]
+    (vec (mapcat collect nodes))))
 
 (defn list-filter [{:keys [list-kind matcher]} nodes]
   (let [type-set (case list-kind
