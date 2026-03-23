@@ -31,7 +31,7 @@
                                                                        :coerce {:status :boolean
                                                                                 :version :string}}))}
 
-  mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq '<selector>' < file.md"
+  mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq [options] '<selector>'. Options: --output FORMAT, --link_format FORMAT, --link-placement PLACE, --quiet, --help"
        :task (mdq/exec! *command-line-args*)}
 
   test {:doc "Run tests"

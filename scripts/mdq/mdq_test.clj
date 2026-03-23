@@ -1,5 +1,6 @@
 (ns mdq-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [cheshire.core :as json]
+            [clojure.test :refer [deftest is testing]]
             [clojure.string]
             [mdq]
             [nextjournal.markdown :as md]))
@@ -69,11 +70,11 @@
 (deftest slice-sections-test
   (let [nodes (:content (md/parse "# A\nfoo\n\n# B\nbar\n\n## C\nbaz"))]
     (testing "level 1 slicing"
-      (let [sections (mdq/slice-sections 1 nodes)]
+      (let [sections (mdq/slice-sections {:level 1} nodes)]
         (is (= 2 (count sections)))
         (is (= "A" (get-in (first sections) [:heading :content 0 :text])))))
     (testing "level 2 slicing"
-      (let [sections (mdq/slice-sections 2 nodes)]
+      (let [sections (mdq/slice-sections {:level 2} nodes)]
         (is (= 3 (count sections)))))))
 
 (deftest section-filter-test
@@ -89,9 +90,9 @@
 (deftest run-pipeline-test
   (let [nodes (:content (md/parse "# A\nfoo\n\n## B\nbar\n\n# C\nbaz"))]
     (testing "single selector"
-      (is (= "# A\n\nfoo\n\n## B\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A")))))
+      (is (= "# A\n\n---\n\nfoo\n\n---\n\n## B\n\n---\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A")))))
     (testing "piped selectors"
-      (is (= "## B\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A | ## B")))))))
+      (is (= "## B\n\n---\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A | ## B")))))))
 
 (deftest emit-markdown-test
   (testing "heading roundtrip"
@@ -115,8 +116,9 @@
     (testing "markdown format"
       (is (string? (mdq/format-output nodes {:output "markdown"}))))
     (testing "json format"
-      (let [out (mdq/format-output nodes {:output "json"})]
-        (is (clojure.string/includes? out "\"items\""))))
+      (let [out (mdq/format-output nodes {:output "json"})
+            parsed (json/parse-string out true)]
+        (is (vector? (:items parsed)))))
     (testing "edn format"
       (let [out (mdq/format-output nodes {:output "edn"})]
         (is (clojure.string/includes? out ":items"))))))
@@ -181,7 +183,7 @@
     (testing "ordered list match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "1. beta")))))
     (testing "ordered list preserves numbers in output"
-      (is (= "1. Alpha\n\n2. Beta\n\n3. Gamma"
+      (is (= "1. Alpha\n\n---\n\n2. Beta\n\n---\n\n3. Gamma"
              (mdq/emit-markdown (mdq/run-pipeline nodes "1.")))))
     (testing "ordered list filtered item preserves its number"
       (is (= "2. Beta"
@@ -347,3 +349,218 @@
               output (mdq/emit-markdown result)]
           (is (clojure.string/includes? output "bar"))
           (is (not (clojure.string/includes? output "foo"))))))))
+
+(deftest anchored-quoted-text-matcher-test
+  (testing "anchored quoted start"
+    (let [m (mdq/parse-text-matcher "^\"Hello\"")]
+      (is (m "Hello World"))
+      (is (not (m "Say Hello")))))
+  (testing "anchored quoted end"
+    (let [m (mdq/parse-text-matcher "\"World\"$")]
+      (is (m "Hello World"))
+      (is (not (m "World Tour")))))
+  (testing "anchored quoted both"
+    (let [m (mdq/parse-text-matcher "^\"Hello\"$")]
+      (is (m "Hello"))
+      (is (not (m "Hello World"))))))
+
+(deftest escape-sequences-test
+  (testing "escape sequences in quoted strings"
+    (let [m (mdq/parse-text-matcher "\"hello\\nworld\"")]
+      (is (m "hello\nworld"))
+      (is (not (m "hello\\nworld"))))
+    (let [m (mdq/parse-text-matcher "\"it\\'s\"")]
+      (is (m "it's")))
+    (let [m (mdq/parse-text-matcher "\"back\\\\slash\"")]
+      (is (m "back\\slash")))
+    (let [m (mdq/parse-text-matcher "\"snow\\u{2603}man\"")]
+      (is (m "snow☃man")))))
+
+(deftest section-level-range-test
+  (testing "section level range selectors"
+    (let [{:keys [level-range]} (mdq/parse-selector "#{2}")]
+      (is (= [2 2] level-range)))
+    (let [{:keys [level-range]} (mdq/parse-selector "#{2,4}")]
+      (is (= [2 4] level-range)))
+    (let [{:keys [level-range]} (mdq/parse-selector "#{2,}")]
+      (is (= [2 6] level-range)))
+    (let [{:keys [level-range]} (mdq/parse-selector "#{,3}")]
+      (is (= [1 3] level-range))))
+  (testing "section level range filtering"
+    (let [nodes (:content (md/parse "# H1\nA\n## H2\nB\n### H3\nC\n#### H4\nD"))]
+      (is (= 2 (count (mdq/slice-sections {:level-range [2 3]} nodes))))
+      (is (= "## H2\n\n---\n\nB\n\n---\n\n### H3\n\n---\n\nC\n\n---\n\n#### H4\n\n---\n\nD"
+             (mdq/emit-markdown (mdq/run-pipeline nodes "#{2,3}")))))))
+
+(deftest ordered-task-selector-test
+  (testing "ordered task selectors"
+    (let [{:keys [type task-kind list-kind]} (mdq/parse-selector "1. [x] done")]
+      (is (= :task type))
+      (is (= :checked task-kind))
+      (is (= :ordered list-kind)))
+    (let [{:keys [type task-kind list-kind]} (mdq/parse-selector "1. [ ]")]
+      (is (= :task type))
+      (is (= :unchecked task-kind))
+      (is (= :ordered list-kind)))))
+
+(deftest html-inline-test
+  (testing "html inline nodes"
+    (let [nodes (:content (md/parse "Some <span>inline</span> here."))]
+      (is (pos? (count (mdq/run-pipeline nodes "</> span")))))))
+
+(deftest whitespace-trimming-link-selector-test
+  (testing "whitespace trimming in link selector"
+    (let [nodes (:content (md/parse "[foo](https://example.com)"))]
+      (is (pos? (count (mdq/run-pipeline nodes "[](  https://example.com  )"))))))
+  (testing "whitespace trimming in image selector"
+    (let [nodes (:content (md/parse "![alt](https://img.com/pic.png)"))]
+      (is (pos? (count (mdq/run-pipeline nodes "![](  https://img.com/pic.png  )")))))))
+
+(deftest nodes-items-test
+  (testing "paragraph item"
+    (let [{:keys [paragraph]} (first (mdq/nodes->items
+                                       (:content (md/parse "Hello **bold**"))))]
+      (is (= "Hello **bold**" paragraph))))
+
+  (testing "code block item"
+    (let [{:keys [code-block]} (first (mdq/nodes->items
+                                        (:content (md/parse "```rust metadata\nfn main() {}\n```"))))]
+      (is (= "fn main() {}\n" (:code code-block)))
+      (is (= "rust" (:language code-block)))
+      (is (= "metadata" (:metadata code-block)))))
+
+  (testing "code block without metadata"
+    (let [{:keys [code-block]} (first (mdq/nodes->items
+                                        (:content (md/parse "```python\nprint('hi')\n```"))))]
+      (is (= "python" (:language code-block)))
+      (is (nil? (:metadata code-block)))))
+
+  (testing "link item"
+    (let [nodes (mdq/run-pipeline
+                  (:content (md/parse "[Google](https://google.com)"))
+                  "[]()")
+          {:keys [link]} (first (mdq/nodes->items nodes))]
+      (is (= "https://google.com" (:url link)))
+      (is (= "Google" (:display link)))))
+
+  (testing "list item with index"
+    (let [{:keys [list]} (first (mdq/nodes->items
+                                  (:content (md/parse "1. one\n2. two"))))]
+      (is (= 2 (count list)))
+      (is (= 1 (:index (first list))))))
+
+  (testing "thematic break item"
+    (let [item (first (mdq/nodes->items (:content (md/parse "---"))))]
+      (is (= {:thematic-break nil} item))))
+
+  (testing "block quote item"
+    (let [{:keys [block-quote]} (first (mdq/nodes->items
+                                         (:content (md/parse "> hello"))))]
+      (is (vector? block-quote))))
+
+  (testing "section grouping"
+    (let [items (mdq/nodes->items (:content (md/parse "# Title\nParagraph\n\n## Sub\nMore")))]
+      (is (= 1 (count items)))
+      (let [{:keys [section]} (first items)]
+        (is (= 1 (:depth section)))
+        (is (= "Title" (:title section)))
+        (is (vector? (:body section)))))))
+
+(deftest format-output-json-test
+  (testing "JSON typed wrapper objects"
+    (let [nodes (:content (md/parse "Hello **bold**"))
+          output (mdq/format-output nodes {:output "json"})
+          parsed (json/parse-string output true)]
+      (is (vector? (:items parsed)))
+      (is (contains? (first (:items parsed)) :paragraph)))))
+
+(deftest plain-text-output-test
+  (testing "plain text output"
+    (let [nodes (:content (md/parse "Hello **bold** and *italic*"))
+          output (mdq/format-output nodes {:output "plain"})]
+      (is (= "Hello bold and italic" (clojure.string/trim output))))))
+
+(deftest thematic-break-separator-test
+  (testing "thematic break separators between items"
+    (let [nodes (:content (md/parse "# A\nfoo\n\n# B\nbar"))
+          result (mdq/run-pipeline nodes "#")]
+      (is (clojure.string/includes?
+            (mdq/format-output result {:output "markdown"})
+            "---")))))
+
+(deftest json-footnotes-test
+  (testing "JSON footnotes"
+    (let [md "Text with footnote.[^a]\n\n[^a]: The footnote content."
+          ast (md/parse md)
+          output (mdq/format-output (:content ast) {:output "json" :ast ast})
+          parsed (json/parse-string output true)]
+      (is (contains? parsed :footnotes)))))
+
+(deftest cli-link-format-test
+  (testing "parse link format flag"
+    (let [opts (mdq/parse-args ["--link_format" "reference" "# test"])]
+      (is (= "reference" (:link-format opts))))
+    (let [opts (mdq/parse-args ["--link-format" "inline" "# test"])]
+      (is (= "inline" (:link-format opts)))))
+  (testing "parse link placement flag"
+    (let [opts (mdq/parse-args ["--link-placement" "doc" "# test"])]
+      (is (= "doc" (:link-placement opts))))
+    (let [opts (mdq/parse-args ["--link_placement" "section" "# test"])]
+      (is (= "section" (:link-placement opts))))))
+
+(deftest reference-link-output-test
+  (testing "reference form link output"
+    (let [md "[Google](https://google.com) and [GitHub](https://github.com)"
+          nodes (:content (md/parse md))
+          output (mdq/format-output nodes {:output "markdown" :link-format "reference"})]
+      (is (clojure.string/includes? output "[Google][1]"))
+      (is (clojure.string/includes? output "[GitHub][2]"))
+      (is (clojure.string/includes? output "[1]: https://google.com"))
+      (is (clojure.string/includes? output "[2]: https://github.com"))))
+  (testing "inline form (default)"
+    (let [md "[Google](https://google.com)"
+          nodes (:content (md/parse md))
+          output (mdq/format-output nodes {:output "markdown"})]
+      (is (clojure.string/includes? output "[Google](https://google.com)"))))
+  (testing "reference deduplication"
+    (let [md "[A](https://x.com) and [B](https://x.com)"
+          nodes (:content (md/parse md))
+          output (mdq/format-output nodes {:output "markdown" :link-format "reference"})]
+      (is (clojure.string/includes? output "[A][1]"))
+      (is (clojure.string/includes? output "[B][1]"))
+      (is (= 1 (count (re-seq #"\[1\]: https://x.com" output)))))))
+
+(deftest table-alignment-test
+  (testing "extract table alignments"
+    (let [md "| L | C | R | N |\n|:--|:--:|--:|---|\n| a | b | c | d |"
+          alignments (mdq/extract-table-alignments md)]
+      (is (= [["left" "center" "right" "none"]] alignments))))
+
+  (testing "alignment in markdown output"
+    (let [md "| L | C | R |\n|:--|:--:|--:|\n| a | b | c |"
+          ast (md/parse md)
+          alignments (mdq/extract-table-alignments md)
+          nodes (mdq/attach-table-alignments (:content ast) alignments)
+          output (mdq/emit-markdown nodes)]
+      (is (clojure.string/includes? output ":---"))
+      (is (clojure.string/includes? output ":---:"))
+      (is (clojure.string/includes? output "---:"))))
+
+  (testing "alignment in data model"
+    (let [md "| L | C | R |\n|:--|:--:|--:|\n| a | b | c |"
+          ast (md/parse md)
+          alignments (mdq/extract-table-alignments md)
+          nodes (mdq/attach-table-alignments (:content ast) alignments)
+          {:keys [table]} (first (mdq/nodes->items nodes))]
+      (is (= ["left" "center" "right"] (:alignments table)))))
+
+  (testing "alignment preserved through column filtering"
+    (let [md "| L | C | R |\n|:--|:--:|--:|\n| a | b | c |"
+          ast (md/parse md)
+          alignments (mdq/extract-table-alignments md)
+          nodes (mdq/attach-table-alignments (:content ast) alignments)
+          result (mdq/run-pipeline nodes ":-: L")
+          output (mdq/emit-markdown result)]
+      (is (clojure.string/includes? output ":---"))
+      (is (not (clojure.string/includes? output ":---:")))
+      (is (not (clojure.string/includes? output "---:"))))))
