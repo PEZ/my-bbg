@@ -199,9 +199,7 @@
       ;; Code block: ```language text
       (str/starts-with? s "```")
       (let [rest-s (str/trim (subs s 3))
-            parts (str/split rest-s #"\s+" 2)
-            lang (first parts)
-            text (second parts)]
+            [lang text] (str/split rest-s #"\s+" 2)]
         {:type :code
          :language-matcher (parse-text-matcher lang)
          :matcher (parse-text-matcher text)})
@@ -210,10 +208,9 @@
       (str/starts-with? s "![")
       (let [close-bracket (str/index-of s "](")
             alt-text (when close-bracket (subs s 2 close-bracket))
-            url-text (when close-bracket
-                       (let [after (subs s (+ 2 close-bracket))
-                             end-paren (str/last-index-of after ")")]
-                         (when end-paren (subs after 0 end-paren))))]
+            after (when close-bracket (subs s (+ 2 close-bracket)))
+            end-paren (when after (str/last-index-of after ")"))
+            url-text (when end-paren (subs after 0 end-paren))]
         {:type :image
          :matcher (parse-text-matcher (some-> alt-text str/trim))
          :url-matcher (parse-text-matcher (some-> url-text str/trim))})
@@ -222,10 +219,9 @@
       (str/starts-with? s "[")
       (let [close-bracket (str/index-of s "](")
             display-text (when close-bracket (subs s 1 close-bracket))
-            url-text (when close-bracket
-                       (let [after (subs s (+ 2 close-bracket))
-                             end-paren (str/last-index-of after ")")]
-                         (when end-paren (subs after 0 end-paren))))]
+            after (when close-bracket (subs s (+ 2 close-bracket)))
+            end-paren (when after (str/last-index-of after ")"))
+            url-text (when end-paren (subs after 0 end-paren))]
         {:type :link
          :matcher (parse-text-matcher (some-> display-text str/trim))
          :url-matcher (parse-text-matcher (some-> url-text str/trim))})
@@ -245,9 +241,7 @@
       ;; Front matter: +++ or +++yaml or +++toml
       (str/starts-with? s "+++")
       (let [rest-s (subs s 3)
-            parts (str/split rest-s #"\s+" 2)
-            fmt-str (first parts)
-            text (second parts)
+            [fmt-str text] (str/split rest-s #"\s+" 2)
             format (case fmt-str
                      "yaml" :yaml
                      "toml" :toml
@@ -265,9 +259,7 @@
       ;; Table: :-: header :-: row
       (str/starts-with? s ":-:")
       (let [parts (str/split s #":-:" -1)
-            meaningful (mapv str/trim (rest parts))
-            col-text (first meaningful)
-            row-text (second meaningful)]
+            [col-text row-text] (mapv str/trim (rest parts))]
         {:type :table
          :col-matcher (parse-text-matcher col-text)
          :row-matcher (parse-text-matcher row-text)})
@@ -387,14 +379,12 @@
       matcher (filter #(text-matches? matcher (or (:raw %) ""))))))
 
 (defn rebuild-table [table col-idxs matched-rows]
-  (let [select-cols (fn [row]
-                      (let [cells (:content row)]
-                        (assoc row :content (mapv #(nth cells %) col-idxs))))
-        head (first (:content table))
+  (let [select-cols (fn [{:keys [content] :as row}]
+                      (assoc row :content (mapv #(nth content %) col-idxs)))
+        [head body] (:content table)
         head-row (first (:content head))
         new-head {:type (:type head)
                   :content [(select-cols head-row)]}
-        body (second (:content table))
         new-body {:type (:type body)
                   :content (mapv select-cols matched-rows)}
         new-alignments (when-let [aligns (:alignments table)]
@@ -473,16 +463,14 @@
     :em (str "*" (apply str (map emit-inline (:content node))) "*")
     :strikethrough (str "~~" (apply str (map emit-inline (:content node))) "~~")
     :link (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
-            (let [href (get-in node [:attrs :href])
+            (let [{:keys [url->ref counter refs]} *emit-opts*
+                  href (get-in node [:attrs :href])
                   text (apply str (map emit-inline (:content node)))
-                  url->ref (:url->ref *emit-opts*)
-                  counter (:counter *emit-opts*)
-                  refs-atom (:refs *emit-opts*)
                   ref-num (or (get @url->ref href)
                               (let [n (swap! counter inc)]
                                 (swap! url->ref assoc href n)
-                                (swap! refs-atom assoc n {:url href
-                                                          :title (get-in node [:attrs :title])})
+                                (swap! refs assoc n {:url href
+                                                     :title (get-in node [:attrs :title])})
                                 n))]
               (str "[" text "][" ref-num "]"))
             (str "[" (apply str (map emit-inline (:content node))) "]("
@@ -558,8 +546,7 @@
     :html-block (apply str (map #(or (:text %) "") (:content node)))
     :link (str "[" (apply str (map emit-inline (:content node))) "](" (get-in node [:attrs :href]) ")")
     :image (str "![" (apply str (map emit-inline (:content node))) "](" (get-in node [:attrs :src]) ")")
-    :table (let [head (first (:content node))
-                 body (second (:content node))
+    :table (let [[head body] (:content node)
                  emit-row (fn [row]
                             (str "| " (str/join " | " (map #(apply str (map emit-inline (:content %)))
                                                            (:content row))) " |"))
@@ -661,8 +648,7 @@
     :code
     (let [info (:info node)
           [lang metadata] (when (seq info)
-                            (let [parts (str/split info #"\s+" 2)]
-                              [(first parts) (second parts)]))]
+                            (str/split info #"\s+" 2))]
       {:code-block (cond-> {:code (content-text node)
                             :type "code"}
                      (seq lang) (assoc :language lang)
@@ -706,8 +692,7 @@
                  (:content node))}
 
     :table
-    (let [head (first (:content node))
-          body (second (:content node))
+    (let [[head body] (:content node)
           emit-row (fn [row]
                      (mapv #(emit-inline-str (:content %)) (:content row)))
           head-row (first (:content head))
