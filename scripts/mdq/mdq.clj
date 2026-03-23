@@ -300,15 +300,10 @@
                    (cons heading body))))))
 
 (defn collect-nodes-deep [types nodes]
-  (let [collect (fn collect [node]
-                  (if (map? node)
-                    (let [child-results (mapcat collect (:content node))]
-                      (if (contains? types (:type node))
-                        (concat child-results [node])
-                        child-results))
-                    (when (sequential? node)
-                      (mapcat collect node))))]
-    (vec (mapcat collect nodes))))
+  (->> (tree-seq (fn [n] (and (map? n) (seq (:content n))))
+                 :content
+                 {:type :root :content nodes})
+       (filterv #(contains? types (:type %)))))
 
 (defn list-filter [{:keys [list-kind matcher]} nodes]
   (let [type-set (case list-kind
@@ -455,18 +450,20 @@
 
 (def ^:dynamic *emit-opts* nil)
 
+(declare emit-inline-str)
+
 (defn emit-inline [node]
   (case (:type node)
     :text (:text node)
     :softbreak "\n"
     :hardbreak "\n\n"
-    :strong (str "**" (apply str (map emit-inline (:content node))) "**")
-    :em (str "*" (apply str (map emit-inline (:content node))) "*")
-    :strikethrough (str "~~" (apply str (map emit-inline (:content node))) "~~")
+    :strong (str "**" (emit-inline-str (:content node)) "**")
+    :em (str "*" (emit-inline-str (:content node)) "*")
+    :strikethrough (str "~~" (emit-inline-str (:content node)) "~~")
     :link (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
             (let [{:keys [url->ref counter refs]} *emit-opts*
                   href (get-in node [:attrs :href])
-                  text (apply str (map emit-inline (:content node)))
+                  text (emit-inline-str (:content node))
                   ref-num (or (get @url->ref href)
                               (let [n (swap! counter inc)]
                                 (swap! url->ref assoc href n)
@@ -474,14 +471,14 @@
                                                      :title (get-in node [:attrs :title])})
                                 n))]
               (str "[" text "][" ref-num "]"))
-            (str "[" (apply str (map emit-inline (:content node))) "]("
+            (str "[" (emit-inline-str (:content node)) "]("
                  (get-in node [:attrs :href]) ")"))
-    :image (str "![" (apply str (map emit-inline (:content node))) "](" (get-in node [:attrs :src]) ")")
-    :monospace (str "`" (apply str (map emit-inline (:content node))) "`")
-    :formula (str "$" (apply str (map emit-inline (:content node))) "$")
+    :image (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")")
+    :monospace (str "`" (emit-inline-str (:content node)) "`")
+    :formula (str "$" (emit-inline-str (:content node)) "$")
     ;; fallback — try content or text
     (if-let [content (:content node)]
-      (apply str (map emit-inline content))
+      (emit-inline-str content)
       (or (:text node) ""))))
 
 (defn extract-table-alignments [markdown-text]
@@ -523,9 +520,9 @@
 (defn emit-node [node]
   (case (:type node)
     :heading (str (apply str (repeat (:heading-level node) "#")) " "
-                  (apply str (map emit-inline (:content node))))
-    :paragraph (apply str (map emit-inline (:content node)))
-    :plain (apply str (map emit-inline (:content node)))
+                  (emit-inline-str (:content node)))
+    :paragraph (emit-inline-str (:content node))
+    :plain (emit-inline-str (:content node))
     :bullet-list (str/join "\n" (map emit-node (:content node)))
     :todo-list (str/join "\n" (map emit-node (:content node)))
     :numbered-list (str/join "\n" (map-indexed
@@ -546,11 +543,11 @@
                "\n```")
     :ruler "---"
     :html-block (apply str (map #(or (:text %) "") (:content node)))
-    :link (str "[" (apply str (map emit-inline (:content node))) "](" (get-in node [:attrs :href]) ")")
-    :image (str "![" (apply str (map emit-inline (:content node))) "](" (get-in node [:attrs :src]) ")")
+    :link (str "[" (emit-inline-str (:content node)) "](" (get-in node [:attrs :href]) ")")
+    :image (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")")
     :table (let [[head body] (:content node)
                  emit-row (fn [row]
-                            (str "| " (str/join " | " (map #(apply str (map emit-inline (:content %)))
+                            (str "| " (str/join " | " (map (comp emit-inline-str :content)
                                                            (:content row))) " |"))
                  head-row (first (:content head))
                  col-count (count (:content head-row))
@@ -558,7 +555,7 @@
                  separator (str "| " (str/join " | " (map alignment->separator aligns)) " |")]
              (str/join "\n" (concat [(emit-row head-row) separator]
                                     (map emit-row (:content body)))))
-    :block-formula (str "$$\n" (apply str (map emit-inline (:content node))) "\n$$")
+    :block-formula (str "$$\n" (emit-inline-str (:content node)) "\n$$")
     :front-matter (str "---\n" (:raw node) "\n---")
     ;; fallback
     (if-let [content (:content node)]
