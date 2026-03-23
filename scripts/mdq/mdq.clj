@@ -266,7 +266,15 @@
                    #{:bullet-list :numbered-list})
         all-lists (collect-nodes-deep type-set nodes)
         items (->> all-lists
-                   (mapcat :content)
+                   (mapcat (fn [list-node]
+                             (let [ordered? (= :numbered-list (:type list-node))
+                                   start (or (get-in list-node [:attrs :start]) 1)]
+                               (map-indexed
+                                (fn [i item]
+                                  (if ordered?
+                                    (assoc-in item [:attrs :order] (+ start i))
+                                    item))
+                                (:content list-node)))))
                    (filter #(= :list-item (:type %))))]
     (cond->> items
       matcher (filter #(text-matches? matcher (md/node->text %))))))
@@ -420,10 +428,14 @@
     :todo-list (str/join "\n" (map emit-node (:content node)))
     :numbered-list (str/join "\n" (map-indexed
                                    (fn [i item]
-                                     (str (+ i (or (get-in node [:attrs :start]) 1)) ". "
-                                          (str/trim (emit-node item))))
+                                     (let [n (+ i (or (get-in node [:attrs :start]) 1))
+                                           item-with-order (assoc-in item [:attrs :order] n)]
+                                       (emit-node item-with-order)))
                                    (:content node)))
-    :list-item (str "- " (str/join "\n  " (map emit-node (:content node))))
+    :list-item (let [order (get-in node [:attrs :order])
+                     prefix (if order (str order ". ") "- ")]
+                 (str prefix (str/join (str "\n" (apply str (repeat (count prefix) " ")))
+                                       (map emit-node (:content node)))))
     :todo-item (str "- [" (if (get-in node [:attrs :checked]) "x" " ") "] "
                     (str/join "\n  " (map emit-node (:content node))))
     :blockquote (str/join "\n" (map #(str "> " (emit-node %)) (:content node)))

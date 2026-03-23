@@ -105,7 +105,10 @@
       (is (= "```clojure\n(+ 1 2)\n\n```" (mdq/emit-markdown nodes)))))
   (testing "bullet list roundtrip"
     (let [nodes (:content (md/parse "- a\n- b\n- c"))]
-      (is (= "- a\n- b\n- c" (mdq/emit-markdown nodes))))))
+      (is (= "- a\n- b\n- c" (mdq/emit-markdown nodes)))))
+  (testing "ordered list roundtrip"
+    (let [nodes (:content (md/parse "1. a\n2. b\n3. c"))]
+      (is (= "1. a\n2. b\n3. c" (mdq/emit-markdown nodes))))))
 
 (deftest format-output-test
   (let [nodes (:content (md/parse "# Test"))]
@@ -171,7 +174,18 @@
     (testing "match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "- foo")))))
     (testing "match all"
-      (is (= 3 (count (mdq/run-pipeline nodes "-")))))))
+      (is (= 3 (count (mdq/run-pipeline nodes "-"))))))
+  (let [nodes (:content (md/parse "1. Alpha\n2. Beta\n3. Gamma"))]
+    (testing "ordered list match all"
+      (is (= 3 (count (mdq/run-pipeline nodes "1.")))))
+    (testing "ordered list match by text"
+      (is (= 1 (count (mdq/run-pipeline nodes "1. beta")))))
+    (testing "ordered list preserves numbers in output"
+      (is (= "1. Alpha\n\n2. Beta\n\n3. Gamma"
+             (mdq/emit-markdown (mdq/run-pipeline nodes "1.")))))
+    (testing "ordered list filtered item preserves its number"
+      (is (= "2. Beta"
+             (mdq/emit-markdown (mdq/run-pipeline nodes "1. beta")))))))
 
 (deftest task-filter-test
   (let [nodes (:content (md/parse "- [ ] todo 1\n- [x] done 1\n- [ ] todo 2"))]
