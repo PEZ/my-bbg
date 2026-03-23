@@ -500,17 +500,18 @@
                                   :else "none"))))))))))
 
 (defn attach-table-alignments [nodes alignments-seq]
-  (let [idx (atom 0)]
-    (mapv (fn [node]
-            (if (= :table (:type node))
-              (let [i @idx
-                    aligns (get alignments-seq i)]
-                (swap! idx inc)
-                (if aligns
-                  (assoc node :alignments aligns)
-                  node))
-              node))
-          nodes)))
+  (:nodes
+   (reduce (fn [{:keys [idx nodes]} node]
+             (if (= :table (:type node))
+               (let [aligns (get alignments-seq idx)]
+                 {:idx (inc idx)
+                  :nodes (conj nodes (if aligns
+                                       (assoc node :alignments aligns)
+                                       node))})
+               {:idx idx
+                :nodes (conj nodes node)}))
+           {:idx 0 :nodes []}
+           nodes)))
 
 (defn- alignment->separator [a]
   (case a
