@@ -517,10 +517,10 @@
       (is (clojure.string/includes? output "[GitHub][2]"))
       (is (clojure.string/includes? output "[1]: https://google.com"))
       (is (clojure.string/includes? output "[2]: https://github.com"))))
-  (testing "inline form (default)"
+  (testing "inline form (explicit)"
     (let [md "[Google](https://google.com)"
           nodes (:content (md/parse md))
-          output (mdq/format-output nodes {:output "markdown"})]
+          output (mdq/format-output nodes {:output "markdown" :link-format "inline"})]
       (is (clojure.string/includes? output "[Google](https://google.com)"))))
   (testing "reference deduplication"
     (let [md "[A](https://x.com) and [B](https://x.com)"
@@ -564,3 +564,47 @@
       (is (clojure.string/includes? output ":---"))
       (is (not (clojure.string/includes? output ":---:")))
       (is (not (clojure.string/includes? output "---:"))))))
+
+(deftest link-placement-test
+  (testing "section placement — refs after each section"
+    (let [md "# A\n\n[Link A](https://a.com)\n\n# B\n\n[Link B](https://b.com)"
+          nodes (:content (md/parse md))
+          output (mdq/format-output nodes {:output "markdown"
+                                           :link-format "reference"
+                                           :link-placement "section"})
+          idx1 (.indexOf output "[1]: https://a.com")
+          idx-b (.indexOf output "# B")]
+      (is (clojure.string/includes? output "[Link A][1]"))
+      (is (clojure.string/includes? output "[1]: https://a.com"))
+      (is (clojure.string/includes? output "[Link B][2]"))
+      (is (clojure.string/includes? output "[2]: https://b.com"))
+      (is (< idx1 idx-b))))
+
+  (testing "section placement — dedup across sections"
+    (let [md "# A\n\n[X](https://same.com)\n\n# B\n\n[Y](https://same.com)"
+          nodes (:content (md/parse md))
+          output (mdq/format-output nodes {:output "markdown"
+                                           :link-format "reference"
+                                           :link-placement "section"})]
+      (is (clojure.string/includes? output "[X][1]"))
+      (is (clojure.string/includes? output "[Y][1]"))
+      (is (= 1 (count (re-seq #"\[1\]: https://same.com" output))))))
+
+  (testing "doc placement — refs at document end"
+    (let [md "# A\n\n[Link A](https://a.com)\n\n# B\n\n[Link B](https://b.com)"
+          nodes (:content (md/parse md))
+          output (mdq/format-output nodes {:output "markdown"
+                                           :link-format "reference"
+                                           :link-placement "doc"})
+          idx1 (.indexOf output "[1]: https://a.com")
+          idx-b (.indexOf output "# B")]
+      (is (> idx1 idx-b))))
+
+  (testing "default placement is section"
+    (let [md "# A\n\n[Link](https://a.com)\n\n# B\n\nNo links here"
+          nodes (:content (md/parse md))
+          output (mdq/format-output nodes {:output "markdown"})
+          idx1 (.indexOf output "[1]: https://a.com")
+          idx-b (.indexOf output "# B")]
+      (is (clojure.string/includes? output "[Link][1]"))
+      (is (< idx1 idx-b)))))

@@ -475,11 +475,12 @@
     :link (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
             (let [href (get-in node [:attrs :href])
                   text (apply str (map emit-inline (:content node)))
+                  url->ref (:url->ref *emit-opts*)
+                  counter (:counter *emit-opts*)
                   refs-atom (:refs *emit-opts*)
-                  existing (some (fn [[n info]] (when (= href (:url info)) n))
-                                 @refs-atom)
-                  ref-num (or existing
-                              (let [n (inc (count @refs-atom))]
+                  ref-num (or (get @url->ref href)
+                              (let [n (swap! counter inc)]
+                                (swap! url->ref assoc href n)
                                 (swap! refs-atom assoc n {:url href
                                                           :title (get-in node [:attrs :title])})
                                 n))]
@@ -586,6 +587,16 @@
        x))
    items))
 
+(defn- group-nodes-by-section [nodes]
+  (reduce (fn [groups node]
+            (if (= :heading (:type node))
+              (conj groups [node])
+              (if (seq groups)
+                (update groups (dec (count groups)) conj node)
+                (conj groups [node]))))
+          []
+          nodes))
+
 (defn format-ref-definitions [refs-map]
   (when (seq refs-map)
     (str/join "\n"
@@ -598,15 +609,37 @@
 (defn emit-markdown
   ([nodes] (emit-markdown nodes nil))
   ([nodes opts]
-   (if (= "reference" (:link-format opts))
-     (let [refs (atom {})]
-       (binding [*emit-opts* {:link-format "reference" :refs refs}]
-         (let [body (str/join "\n\n---\n\n" (map emit-node nodes))
-               ref-defs (format-ref-definitions @refs)]
-           (if (seq ref-defs)
-             (str body "\n\n" ref-defs)
-             body))))
-     (str/join "\n\n---\n\n" (map emit-node nodes)))))
+   (let [link-format (or (:link-format opts) "reference")
+         link-placement (or (:link-placement opts) "section")]
+     (if (= "reference" link-format)
+       (let [counter (atom 0)
+             url->ref (atom {})]
+         (if (= "section" link-placement)
+           ;; Section placement: refs after each section group
+           (str/join "\n\n---\n\n"
+                     (mapv (fn [group]
+                             (let [refs (atom (sorted-map))]
+                               (binding [*emit-opts* {:link-format "reference"
+                                                      :refs refs
+                                                      :counter counter
+                                                      :url->ref url->ref}]
+                                 (let [body (str/join "\n\n---\n\n" (map emit-node group))
+                                       defs (format-ref-definitions @refs)]
+                                   (if (seq defs)
+                                     (str body "\n\n" defs)
+                                     body)))))
+                           (group-nodes-by-section nodes)))
+           ;; Doc placement: all refs at end
+           (let [refs (atom (sorted-map))]
+             (binding [*emit-opts* {:link-format "reference"
+                                    :refs refs
+                                    :counter counter
+                                    :url->ref url->ref}]
+               (let [body (str/join "\n\n---\n\n" (map emit-node nodes))
+                     defs (format-ref-definitions @refs)]
+                 (if (seq defs) (str body "\n\n" defs) body))))))
+       ;; Inline format
+       (str/join "\n\n---\n\n" (map emit-node nodes))))))
 
 (defn- emit-inline-str [content]
   (apply str (map emit-inline content)))
@@ -815,7 +848,7 @@
       (println)
       (println "Options:")
       (println "  -o, --output FORMAT       Output format: markdown (default), json, edn, plain")
-      (println "  --link_format FORMAT      Link format: inline (default), reference")
+      (println "  --link_format FORMAT      Link format: reference (default), inline")
       (println "  --link-placement PLACE    Link placement: section (default), doc")
       (println "  -q, --quiet               Exit 0 if found, non-0 otherwise (no output)")
       (println "  -h, --help                Show this help")
