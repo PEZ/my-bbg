@@ -1,11 +1,12 @@
-{:paths ["scripts"]
+{:paths ["scripts" "scripts/mdq"]
  :deps {org.babashka/cli {:mvn/version "0.2.23"}}
  :tasks
  {:requires ([babashka.cli :as cli]
              config-save
              deps-clj-as-clojure
              java-version
-             loc)
+             loc
+             mdq)
 
   :enter (def cwd (:cwd (cli/parse-opts *command-line-args*)))
 
@@ -28,4 +29,12 @@
   java {:doc "Manage Java versions. Options: --status, --version <major|latest>"
         :task (java-version/exec! (cli/parse-opts *command-line-args* {:args->opts [:version]
                                                                        :coerce {:status :boolean
-                                                                                :version :string}}))}}}
+                                                                                :version :string}}))}
+
+  mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq '<selector>' < file.md"
+       :task (mdq/exec! *command-line-args*)}
+
+  test {:doc "Run tests"
+        :task (do (require 'mdq-test :reload)
+                  (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test)]
+                    (System/exit (if (zero? (+ fail error)) 0 1))))}}}
