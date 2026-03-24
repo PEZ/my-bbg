@@ -192,13 +192,13 @@ Refactor `process-escape-sequences` for character-by-character validation with p
 
 Targeted checks in individual parser branches.
 
-- [ ] Regex compilation: wrap `re-pattern` in try/catch, translate Java regex exception to pest error at the problematic position
-- [ ] Table parsing: detect empty column matcher (two consecutive `:-:` delimiters with no content), throw at col of second delimiter
-- [ ] Front-matter format: validate token after `+++` is empty, `yaml`, or `toml` — throw with col range spanning the invalid token
-- [ ] HTML text matcher: ensure the existing `<`-rejection produces pest-format error
-- [ ] No new lint errors
-- [ ] Unit tests pass
-- [ ] E2E: 4 new passes (target: 109/135)
+- [x] Regex compilation: wrap `re-pattern` in try/catch, translate Java regex exception to pest error at the problematic position
+- [x] Table parsing: detect empty column matcher (two consecutive `:-:` delimiters with no content), throw at col of second delimiter
+- [x] Front-matter format: validate token after `+++` is empty, `yaml`, or `toml` — throw with col range spanning the invalid token
+- [x] HTML text matcher: ensure the existing `<`-rejection produces pest-format error
+- [x] No new lint errors
+- [x] Unit tests pass
+- [x] E2E: 4 new passes (target: 109/135)
 
 **What the system can do now:** All 23 error cases produce correct pest-style error messages. Parser validation is complete.
 

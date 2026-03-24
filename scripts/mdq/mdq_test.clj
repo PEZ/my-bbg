@@ -27,17 +27,30 @@
            (mdq/split-pipeline "  # A  |  ## B  ")))))
 
 (deftest pest-error-formatting-test
-  (testing "single-column pointer"
+  (testing "default single-column pointer"
     (is (= "Syntax error in select specifier:\n --> 1:1\n  |\n1 | ~\n  | ^---\n  |\n  = expected valid query"
            (mdq/format-pest-error {:col 1
                                    :message "expected valid query"
                                    :input "~"}))))
-  (testing "range pointer"
+  (testing "point pointer"
+    (is (= "Syntax error in select specifier:\n --> 1:4\n  |\n1 | # /\\P{/\n  |    ^\n  |\n  = regex parse error: Unicode escape not closed"
+           (mdq/format-pest-error {:col 4
+                                   :message "regex parse error: Unicode escape not closed"
+                                   :input "# /\\P{/"
+                                   :pointer-style :point}))))
+  (testing "default range pointer"
     (is (= "Syntax error in select specifier:\n --> 1:7\n  |\n1 | # \"\\u{FFFFFF}\"\n  |       ^----^\n  |\n  = invalid unicode sequence: FFFFFF"
            (mdq/format-pest-error {:col 7
                                    :end-col 11
                                    :message "invalid unicode sequence: FFFFFF"
-                                   :input "# \"\\u{FFFFFF}\""})))))
+                                   :input "# \"\\u{FFFFFF}\""}))))
+  (testing "tight range pointer"
+    (is (= "Syntax error in select specifier:\n --> 1:4\n  |\n1 | +++other\n  |    ^---^\n  |\n  = front matter language must be \"toml\" or \"yaml\". Found \"other\"."
+           (mdq/format-pest-error {:col 4
+                                   :end-col 8
+                                   :message "front matter language must be \"toml\" or \"yaml\". Found \"other\"."
+                                   :input "+++other"
+                                   :pointer-style :tight-range})))))
 
 (deftest throw-parse-error-test
   (testing "keeps relative columns without a segment offset"
@@ -228,7 +241,40 @@
             (str selector " should throw ExceptionInfo"))
         (is (= expected
                (select-keys (ex-data error) [:type :col :end-col :message :input]))
-            (str selector " should report the phase-5 escape parse error"))))))
+            (str selector " should report the phase-5 escape parse error")))))
+  (testing "phase 6 targeted validations return precise parse errors"
+    (doseq [[selector expected]
+            [["# /\\P{/"
+              {:type :parse-error
+               :col 4
+               :message "regex parse error: Unicode escape not closed"
+               :input "# /\\P{/"}]
+             [":-: :-: row"
+              {:type :parse-error
+               :col 5
+               :message "table column matcher cannot empty; use an explicit \"*\""
+               :input ":-: :-: row"}]
+             ["+++other"
+              {:type :parse-error
+               :col 4
+               :end-col 8
+               :message "front matter language must be \"toml\" or \"yaml\". Found \"other\"."
+               :input "+++other"}]
+             ["</> <span>"
+              {:type :parse-error
+               :col 5
+               :message "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""
+               :input "</> <span>"}]]]
+      (let [error (try
+                    (binding [mdq/*selector-input* selector]
+                      (mdq/parse-selector selector))
+                    (catch clojure.lang.ExceptionInfo e
+                      e))]
+        (is (instance? clojure.lang.ExceptionInfo error)
+            (str selector " should throw ExceptionInfo"))
+        (is (= expected
+               (select-keys (ex-data error) [:type :col :end-col :message :input]))
+            (str selector " should report the phase-6 targeted parse error"))))))
 
 (deftest slice-sections-test
   (let [nodes (:content (md/parse "# A\nfoo\n\n# B\nbar\n\n## C\nbaz"))]
@@ -291,7 +337,20 @@
                 :col 11
                 :message "expected \", ', `, \\, n, r, or t"
                 :input selector}
-               (select-keys (ex-data error) [:type :col :message :input])))))))
+               (select-keys (ex-data error) [:type :col :message :input])))))
+    (testing "phase 6 range errors keep absolute columns across pipelines"
+      (let [selector "# * | +++other"
+            error (try
+                    (mdq/run-pipeline nodes selector)
+                    (catch clojure.lang.ExceptionInfo e
+                      e))]
+        (is (instance? clojure.lang.ExceptionInfo error))
+        (is (= {:type :parse-error
+                :col 10
+                :end-col 14
+                :message "front matter language must be \"toml\" or \"yaml\". Found \"other\"."
+                :input selector}
+               (select-keys (ex-data error) [:type :col :end-col :message :input])))))))
 
 (deftest emit-markdown-test
   (testing "heading roundtrip"
