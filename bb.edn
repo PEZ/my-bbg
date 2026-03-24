@@ -1,4 +1,4 @@
-{:paths ["scripts" "scripts/mdq"]
+{:paths ["scripts" "scripts/mdq" "test"]
  :deps {org.babashka/cli {:mvn/version "0.2.23"}}
  :tasks
  {:requires ([babashka.cli :as cli]
@@ -6,7 +6,8 @@
              deps-clj-as-clojure
              java-version
              loc
-             mdq)
+             mdq
+             mdq-e2e-test)
 
   :enter (def cwd (:cwd (cli/parse-opts *command-line-args*)))
 
@@ -33,6 +34,12 @@
 
   mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq [options] '<selector>'. Options: --output FORMAT, --link_format FORMAT, --link-placement PLACE, --quiet, --help"
        :task (mdq/exec! *command-line-args*)}
+
+  e2e-test {:doc "Run E2E compatibility tests against Rust mdq specs. Options: --refresh, --spec FILE"
+            :task (mdq-e2e-test/run!
+                   (cli/parse-opts *command-line-args*
+                                   {:coerce {:refresh :boolean
+                                             :spec :string}}))}
 
   test {:doc "Run tests"
         :task (do (require 'mdq-test :reload)

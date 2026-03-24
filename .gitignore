@@ -8,3 +8,5 @@ target/
 
 output.calva-repl
 **/.calva/repl.calva-repl
+
+dev/test-specs/

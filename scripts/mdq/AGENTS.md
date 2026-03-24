@@ -170,6 +170,56 @@ Pattern — construct AST from markdown strings, test pure functions:
 
 For front-matter tests, construct synthetic nodes directly since `md/parse` doesn't produce them.
 
+## E2E Testing
+
+Compatibility tests against the [Rust mdq](https://github.com/yshavit/mdq) reference implementation.
+
+Run: `bbg e2e-test`
+
+Options:
+- `--refresh` — re-download spec files from GitHub
+- `--spec FILE` — run a single spec (e.g., `--spec select_sections.toml`)
+
+### How It Works
+
+1. **Specs** — TOML test files from Rust mdq's `tests/md_cases/` directory, cached in `dev/test-specs/md_cases/`
+2. **Execution** — Each test case runs `bbg mdq` as a subprocess with the spec's markdown input and CLI args
+3. **Comparison** — Output, exit codes, and stderr are compared against expected values
+4. **Reporting** — Per-spec PASS/FAIL summary with failure details
+
+### Architecture
+
+| File | Purpose |
+|------|---------|
+| `test/e2e_specs.clj` | Download, cache, and parse TOML specs from GitHub |
+| `test/mdq_e2e_test.clj` | Test runner: execute cases, compare, report |
+
+Key functions in `e2e-specs`: `ensure-specs!`, `load-specs`, `parse-spec`
+Key functions in `mdq-e2e-test`: `run-test-case`, `run-specs`, `report-results`, `run!`
+
+### Normalization
+
+`normalize-expected` applies temporary output transformations to bridge known differences between our mdq and the Rust reference. Each rule is a TODO to remove as our implementation converges:
+
+- 5-dash separator → 3-dash (separator style difference)
+- Trailing whitespace trim
+
+### Debugging Failures
+
+```bash
+# Run single spec
+bbg e2e-test --spec select_sections.toml
+
+# Inspect spec data in REPL
+(require '[e2e-specs :as specs])
+(def s (first (specs/load-specs :spec-file "select_sections.toml")))
+(:expectations s)  ; see all test cases
+
+# Run one test case manually
+(require '[mdq-e2e-test :as e2e])
+(e2e/run-test-case s (first (:expectations s)))
+```
+
 ## Dependencies
 
 All built into Babashka — no external deps required:
