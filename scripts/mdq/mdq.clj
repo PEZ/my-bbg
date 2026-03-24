@@ -442,10 +442,21 @@
     (cond->> items
       matcher (filter #(text-matches? matcher (md/node->text %))))))
 
-(defn task-filter [{:keys [task-kind matcher]} nodes]
+(defn task-filter [{:keys [task-kind list-kind matcher]} nodes]
   (let [todo-lists (collect-nodes-deep #{:todo-list} nodes)
-        items (->> todo-lists
-                   (mapcat :content)
+        filtered-lists (if (= :ordered list-kind)
+                         (filter #(contains? (:attrs %) :start) todo-lists)
+                         (remove #(contains? (:attrs %) :start) todo-lists))
+        items (->> filtered-lists
+                   (mapcat (fn [tl]
+                             (let [ordered? (contains? (:attrs tl) :start)
+                                   start (get-in tl [:attrs :start] 1)]
+                               (map-indexed
+                                (fn [i item]
+                                  (if ordered?
+                                    (assoc-in item [:attrs :order] (+ start i))
+                                    item))
+                                (:content tl)))))
                    (filter #(= :todo-item (:type %))))]
     (cond->> items
       (= :unchecked task-kind) (filter #(not (get-in % [:attrs :checked])))
@@ -660,8 +671,11 @@
                      prefix (if order (str order ". ") "- ")]
                  (str prefix (str/join (str "\n" (apply str (repeat (count prefix) " ")))
                                        (map emit-node (:content node)))))
-    :todo-item (str "- [" (if (get-in node [:attrs :checked]) "x" " ") "] "
-                    (str/join "\n  " (map emit-node (:content node))))
+    :todo-item (let [order (get-in node [:attrs :order])
+                     prefix (if order (str order ". ") "- ")]
+                 (str prefix "[" (if (get-in node [:attrs :checked]) "x" " ") "] "
+                      (str/join (str "\n" (apply str (repeat (+ (count prefix) 4) " ")))
+                                (map emit-node (:content node)))))
     :blockquote (str/join "\n" (map #(str "> " (emit-node %)) (:content node)))
     :code (str "```" (or (:language node) "") "\n"
                (str/trimr (content-text node))
