@@ -898,6 +898,132 @@
 
 (declare emit-inline-str)
 
+(defn ref-key-comparator
+  "Comparator for reference keys that handles mixed numeric/string types.
+   Numbers sort before strings, strings sort case-insensitively."
+  [a b]
+  (let [a-num (if (number? a) a (parse-long (str a)))
+        b-num (if (number? b) b (parse-long (str b)))]
+    (cond
+      (and a-num b-num) (compare a-num b-num)
+      a-num -1
+      b-num 1
+      :else (compare (str/lower-case (str a)) (str/lower-case (str b))))))
+
+(defn detect-link-forms
+  "Detects the original form of each link in the raw markdown.
+   Returns a map of [text href] -> {:form :inline/:reference/:collapsed/:shortcut
+                                     :ref-id :title :title-quote}"
+  [raw-md ref-defs]
+  (let [result (atom {})
+        inline-pattern #"\[([^\]]+)\]\((\S+?)(?:\s+([\"'])(.*?)\3)?\)"
+        collapsed-pattern #"\[([^\]]+)\]\[\]"
+        ref-pattern #"\[([^\]]+)\]\[([^\]]+)\]"
+        shortcut-pattern #"(?<!\])\[([^\]]+)\](?!\[|\(|:)"]
+    ;; 1. Inline links
+    (doseq [[_ text url quote title] (re-seq inline-pattern raw-md)]
+      (swap! result assoc [text url]
+             (cond-> {:form :inline}
+               title (assoc :title title :title-quote (first quote)))))
+    ;; 2. Collapsed links
+    (doseq [[_ text] (re-seq collapsed-pattern raw-md)]
+      (when-let [def (get ref-defs text)]
+        (swap! result assoc [text (:url def)]
+               (cond-> {:form :collapsed :ref-id text}
+                 (:title def) (assoc :title (:title def)
+                                     :title-quote (:title-quote def))))))
+    ;; 3. Reference links
+    (doseq [[_ text ref-id] (re-seq ref-pattern raw-md)]
+      (when-let [def (get ref-defs ref-id)]
+        (swap! result assoc [text (:url def)]
+               (cond-> {:form :reference :ref-id ref-id}
+                 (:title def) (assoc :title (:title def)
+                                     :title-quote (:title-quote def))))))
+    ;; 4. Shortcut links
+    (doseq [[_ text] (re-seq shortcut-pattern raw-md)]
+      (when-let [def (get ref-defs text)]
+        (let [k [text (:url def)]]
+          (when-not (get @result k)
+            (swap! result assoc k
+                   (cond-> {:form :shortcut :ref-id text}
+                     (:title def) (assoc :title (:title def)
+                                         :title-quote (:title-quote def))))))))
+    @result))
+
+(defn- emit-link-never-inline
+  "Emits a link in never-inline mode. Preserves collapsed/shortcut/non-numeric reference forms.
+   Inline and numeric reference links are assigned sequential numeric refs."
+  [node text href link-form]
+  (let [{:keys [url->ref counter refs]} *emit-opts*
+        form (:form link-form)
+        title (or (:title link-form) (get-in node [:attrs :title]))
+        title-quote (or (:title-quote link-form) \")]
+    (case form
+      :collapsed (do
+                   (swap! refs assoc text {:url href :title title :title-quote title-quote})
+                   (str "[" text "][]"))
+      :shortcut (do
+                  (swap! refs assoc text {:url href :title title :title-quote title-quote})
+                  (str "[" text "]"))
+      :reference (let [ref-id (:ref-id link-form)
+                        numeric-id (parse-long ref-id)]
+                    (if numeric-id
+                      ;; Numeric ref: reassign sequential
+                      (let [dedup-key [href title]
+                            ref-num (or (get @url->ref dedup-key)
+                                        (let [n (swap! counter inc)]
+                                          (swap! url->ref assoc dedup-key n)
+                                          n))]
+                        (swap! refs assoc ref-num {:url href :title title :title-quote title-quote})
+                        (str "[" text "][" ref-num "]"))
+                      ;; Non-numeric ref: preserve original ref-id
+                      (do
+                        (swap! refs assoc ref-id {:url href :title title :title-quote title-quote})
+                        (str "[" text "][" ref-id "]"))))
+      ;; :inline or unknown — assign sequential numeric ref
+      (let [dedup-key [href title]
+            ref-num (or (get @url->ref dedup-key)
+                        (let [n (swap! counter inc)]
+                          (swap! url->ref assoc dedup-key n)
+                          n))]
+        (swap! refs assoc ref-num {:url href :title title :title-quote title-quote})
+        (str "[" text "][" ref-num "]")))))
+
+(defn- emit-link-keep
+  "Emits a link preserving its original form."
+  [node text href link-form]
+  (let [{:keys [refs]} *emit-opts*
+        form-info (or link-form {:form :inline})
+        form (:form form-info)
+        title (or (:title form-info) (get-in node [:attrs :title]))
+        title-quote (or (:title-quote form-info) \")]
+    (case form
+      :inline (if (seq title)
+                (str "[" text "](" href " " title-quote title title-quote ")")
+                (str "[" text "](" href ")"))
+      :collapsed (do
+                   (swap! refs assoc text {:url href :title title :title-quote title-quote})
+                   (str "[" text "][]"))
+      :shortcut (do
+                  (swap! refs assoc text {:url href :title title :title-quote title-quote})
+                  (str "[" text "]"))
+      :reference (let [ref-id (:ref-id form-info)]
+                   (swap! refs assoc ref-id {:url href :title title :title-quote title-quote})
+                   (str "[" text "][" ref-id "]"))
+      ;; default - inline fallback
+      (if (seq title)
+        (str "[" text "](" href " " title-quote title title-quote ")")
+        (str "[" text "](" href ")")))))
+
+(defn- emit-link-inline
+  "Emits a link as inline, converting all forms."
+  [node text href link-form]
+  (let [title (or (:title (or link-form {})) (get-in node [:attrs :title]))
+        title-quote (or (:title-quote (or link-form {})) \")]
+    (if (seq title)
+      (str "[" text "](" href " " title-quote title title-quote ")")
+      (str "[" text "](" href ")"))))
+
 (defn emit-inline [node]
   (case (:type node)
     :text (:text node)
@@ -917,30 +1043,31 @@
                         (do (swap! label->num assoc label label)
                             (str "[^" label "]")))
                       (str "[^" label "]")))
-    :link (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
-            (let [{:keys [url->ref counter refs]} *emit-opts*
-                  href (get-in node [:attrs :href])
-                  text (emit-inline-str (:content node))
-                  ref-num (or (get @url->ref href)
-                              (let [n (swap! counter inc)]
-                                (swap! url->ref assoc href n)
-                                (swap! refs assoc n {:url href
-                                                     :title (get-in node [:attrs :title])})
-                                n))]
-              (str "[" text "][" ref-num "]"))
-            (str "[" (emit-inline-str (:content node)) "]("
-                 (get-in node [:attrs :href]) ")"))
-    :image (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
+    :link (let [text (emit-inline-str (:content node))
+                href (get-in node [:attrs :href])
+                link-format (:link-format *emit-opts*)
+                link-forms (:link-forms *emit-opts*)
+                link-form (when link-forms (get link-forms [text href]))]
+            (case link-format
+              "never-inline" (emit-link-never-inline node text href link-form)
+              "keep" (emit-link-keep node text href link-form)
+              "inline" (emit-link-inline node text href link-form)
+              "reference" (emit-link-never-inline node text href link-form)
+              ;; default
+              (str "[" text "](" href ")")))
+    :image (if (and *emit-opts* (contains? #{"reference" "never-inline"} (:link-format *emit-opts*)))
              (let [{:keys [url->ref counter refs]} *emit-opts*
                    src (get-in node [:attrs :src])
                    alt (emit-inline-str (:content node))
-                   ref-num (or (get @url->ref src)
+                   dedup-key [src nil]
+                   ref-num (or (get @url->ref dedup-key)
                                (let [n (swap! counter inc)]
-                                 (swap! url->ref assoc src n)
+                                 (swap! url->ref assoc dedup-key n)
                                  (swap! refs assoc n {:url src})
                                  n))]
                (str "![" alt "][" ref-num "]"))
-             (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")"))
+             (str "![" (emit-inline-str (:content node)) "]("
+                  (get-in node [:attrs :src]) ")"))
     :monospace (str "`" (emit-inline-str (:content node)) "`")
     :formula (str "$" (emit-inline-str (:content node)) "$")
     ;; fallback — try content or text
@@ -1099,11 +1226,12 @@
 (defn format-ref-definitions [refs-map]
   (when (seq refs-map)
     (str/join "\n"
-              (map (fn [[n {:keys [url title]}]]
+              (map (fn [[n {:keys [url title title-quote]}]]
                      (if (seq title)
-                       (str "[" n "]: " url " \"" title "\"")
+                       (let [q (or title-quote \")]
+                         (str "[" n "]: " url " " q title q))
                        (str "[" n "]: " url)))
-                   (sort-by key refs-map)))))
+                   refs-map))))
 
 (defn- footnote-label-comparator [a b]
   (let [a-num (parse-long a)
@@ -1136,10 +1264,24 @@
                            (str "[^" label "]: " fn-body)))
                        sorted-labels))))))
 
+(defn- extract-ref-links
+  "Extract reference link definitions from raw markdown text."
+  [markdown]
+  (let [pattern #"(?m)^\[([^\]]+)\]:\s+(\S+)(?:\s+([\"'])(.*?)\3)?\s*$"]
+    (->> (re-seq pattern markdown)
+         (reduce (fn [m [_ ref url quote title]]
+                   (assoc m ref (cond-> {:url url}
+                                  (seq title) (assoc :title title
+                                                     :title-quote (first quote)))))
+                 (sorted-map)))))
+
 (defn emit-markdown
   ([nodes] (emit-markdown nodes nil))
   ([nodes opts]
-   (let [link-format (or (:link-format opts) "reference")
+   (let [raw-md (:raw-md opts)
+         ref-defs (when raw-md (extract-ref-links raw-md))
+         link-forms (when raw-md (detect-link-forms raw-md ref-defs))
+         link-format (or (:link-format opts) "never-inline")
          link-placement (or (:link-placement opts) "section")
          renumber-footnotes (get opts :renumber-footnotes true)
          groups (separate-results nodes)
@@ -1149,9 +1291,10 @@
          footnotes-by-label (when footnotes
                               (into {} (map (juxt :label identity)) footnotes))
          footnote-label->num (atom {})
-         footnote-counter (atom 0)]
+         footnote-counter (atom 0)
+         needs-refs? (contains? #{"reference" "never-inline" "keep"} link-format)]
      (let [main-output
-           (if (= "reference" link-format)
+           (if needs-refs?
              (let [counter (atom 0)
                    url->ref (atom {})]
                (if (= "section" link-placement)
@@ -1161,8 +1304,9 @@
                                    (let [section-groups (group-nodes-by-section (vec group))]
                                      (str/join "\n\n"
                                                (mapv (fn [sg]
-                                                       (let [refs (atom (sorted-map))]
-                                                         (binding [*emit-opts* {:link-format "reference"
+                                                       (let [refs (atom (sorted-map-by ref-key-comparator))]
+                                                         (binding [*emit-opts* {:link-format link-format
+                                                                                :link-forms link-forms
                                                                                 :refs refs
                                                                                 :counter counter
                                                                                 :url->ref url->ref
@@ -1177,8 +1321,9 @@
                                                      section-groups))))
                                  groups))
                  ;; Doc placement: all refs at end
-                 (let [refs (atom (sorted-map))]
-                   (binding [*emit-opts* {:link-format "reference"
+                 (let [refs (atom (sorted-map-by ref-key-comparator))]
+                   (binding [*emit-opts* {:link-format link-format
+                                          :link-forms link-forms
                                           :refs refs
                                           :counter counter
                                           :url->ref url->ref
@@ -1192,8 +1337,10 @@
                            defs (format-ref-definitions @refs)
                            defs-sep (if (> (count groups) 1) group-sep "\n\n")]
                        (if (seq defs) (str body defs-sep defs) body))))))
-             ;; Inline format
-             (binding [*emit-opts* {:footnote-label->num footnote-label->num
+             ;; Inline format - no ref defs needed
+             (binding [*emit-opts* {:link-format link-format
+                                    :link-forms link-forms
+                                    :footnote-label->num footnote-label->num
                                     :footnote-counter footnote-counter
                                     :renumber-footnotes renumber-footnotes}]
                (str/join group-sep
@@ -1385,15 +1532,7 @@
           [[]]
           nodes))
 
-(defn- extract-ref-links
-  "Extract reference link definitions from raw markdown text."
-  [markdown]
-  (let [pattern #"(?m)^\[([^\]]+)\]:\s+(\S+)(?:\s+\"([^\"]*)\")?\s*$"]
-    (->> (re-seq pattern markdown)
-         (reduce (fn [m [_ ref url title]]
-                   (assoc m ref (cond-> {:url url}
-                                  (seq title) (assoc :title title))))
-                 (sorted-map)))))
+
 
 (defn format-output [nodes opts]
   (let [output-kw (keyword (or (:output opts) "markdown"))
@@ -1554,7 +1693,7 @@
       {:output (str "Usage: bbg mdq [options] '<selector>'\n\n"
                     "Options:\n"
                     "  -o, --output FORMAT       Output format: markdown (default), json, edn, plain\n"
-                    "  --link-format FORMAT      Link format: reference (default), inline\n"
+                    "  --link-format FORMAT      Link format: never-inline (default), inline, keep\n"
                     "  --link-placement PLACE    Link placement: section (default), doc\n"
                     "  -q, --quiet               Exit 0 if found, non-0 otherwise (no output)\n"
                     "  -h, --help                Show this help")
