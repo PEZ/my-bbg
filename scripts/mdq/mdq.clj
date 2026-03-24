@@ -1365,6 +1365,12 @@
           (contains? #{"--link-placement" "--link-pos"} arg)
           (recur (nnext remaining) (assoc opts :link-placement (second remaining)) selector-parts)
 
+          (= "--renumber-footnotes" arg)
+          (recur (nnext remaining) (assoc opts :renumber-footnotes (not= (second remaining) "false")) selector-parts)
+
+          (= "--wrap-width" arg)
+          (recur (nnext remaining) (assoc opts :wrap-width (parse-long (second remaining))) selector-parts)
+
           (= "--cwd" arg)
           (recur (nnext remaining) opts selector-parts)
 
@@ -1377,12 +1383,15 @@
                        "--output" (assoc opts :output value)
                        "--link-format" (assoc opts :link-format value)
                        ("--link-placement" "--link-pos") (assoc opts :link-placement value)
+                       "--renumber-footnotes" (assoc opts :renumber-footnotes (not= value "false"))
+                       "--wrap-width" (assoc opts :wrap-width (parse-long value))
                        opts)
                      selector-parts))
             (recur (next remaining) opts selector-parts))
 
           :else
           (recur (next remaining) opts (conj selector-parts arg)))))))
+
 
 (defn exec! [args]
   (let [opts (parse-args args)]
