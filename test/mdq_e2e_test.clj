@@ -39,16 +39,7 @@
     (run-mdq-subprocess markdown cli-args opts)
     (run-mdq-in-process markdown cli-args opts)))
 
-(defn- normalize-expected
-  "Temporary normalization of expected output.
-   Each rule is a TODO to remove by fixing our mdq."
-  [expected]
-  (-> expected
-      ;; TODO: Remove when separator style converges
-      ;; Rust uses '   -----' (indented 3-space + 5-dash) between results
-      (str/replace #"(?m)^ {3}-----$" "---")
-      ;; TODO: Remove when trailing whitespace handling converges
-      str/trimr))
+
 
 (defn- run-test-case
   "Run one test expectation, return result map."
@@ -66,9 +57,9 @@
           exit-ok? (if expect-success (zero? exit) (not (zero? exit)))
           output-ok? (cond
                        (nil? expected-output) true
-                       output-json (= (json/parse-string (normalize-expected expected-output) true)
+                       output-json (= (json/parse-string (str/trimr expected-output) true)
                                       (json/parse-string (str/trimr out) true))
-                       :else (= (normalize-expected expected-output)
+                       :else (= (str/trimr expected-output)
                                 (str/trimr out)))
           err-ok? (if output-err
                     (str/includes? err output-err)
@@ -77,7 +68,7 @@
       (when tmp-dir (fs/delete-tree tmp-dir))
       (cond-> {:spec file :test name :status (if pass? :pass :fail)}
         (not exit-ok?) (assoc :exit-expected (if expect-success 0 "non-zero") :exit-actual exit)
-        (not output-ok?) (assoc :expected (normalize-expected (or expected-output ""))
+        (not output-ok?) (assoc :expected (str/trimr (or expected-output ""))
                                 :actual (str/trimr out))
         (not err-ok?) (assoc :err-expected output-err :err-actual err)))))
 

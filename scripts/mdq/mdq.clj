@@ -1413,7 +1413,7 @@
          link-placement (or (:link-placement opts) "section")
          renumber-footnotes (get opts :renumber-footnotes true)
          groups (separate-results nodes)
-         group-sep (if (:no-br opts) "\n\n" "\n\n---\n\n")
+         group-sep (if (:no-br opts) "\n\n" "\n\n   -----\n\n")
          footnotes (when-let [fns (:footnotes (:ast opts))]
                      (when (seq fns) fns))
          footnotes-by-label (when footnotes
@@ -1710,7 +1710,7 @@
       :markdown (emit-markdown nodes opts)
       :plain (let [texts (mapcat node->plain-texts nodes)
                    sep (if (:br opts) "\n\n" "\n")]
-               (str (str/join sep texts) "\n"))
+               (str/join sep texts))
       (let [clean-nodes (vec (remove #(= :result-separator (:type %)) nodes))
             has-selector? (some? (:selector opts))
             raw-md (:raw-md opts)

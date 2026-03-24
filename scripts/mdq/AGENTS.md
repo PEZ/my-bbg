@@ -160,6 +160,18 @@ Use `--` to force selector interpretation: `bbg mdq -- '- item'`
 
 ## Testing
 
+Unit tests (`scripts/mdq/mdq_test.clj`) and E2E tests (`test/mdq_e2e_test.clj`) run automatically via VS Code watch tasks. The "Dev" compound task (Cmd+Shift+B) starts both watchers alongside the bb nREPL. Watchers re-run on file save — no need to run tests manually.
+
+To run a specific E2E spec file:
+
+```sh
+bb e2e-test --spec select_sections.toml
+```
+
+E2E specs live in `dev/test-specs/md_cases/`. The `--spec` flag accepts a filename to run a single spec instead of the full suite.
+
+## Testing
+
 Run: `bb run test` or `bb -cp "scripts:test" -e "(require 'mdq-test :reload) (clojure.test/run-tests 'mdq-test)"`
 
 Pattern — construct AST from markdown strings, test pure functions:
@@ -201,7 +213,6 @@ Key functions in `mdq-e2e-test`: `run-test-case`, `run-specs`, `report-results`,
 
 `normalize-expected` applies temporary output transformations to bridge known differences between our mdq and the Rust reference. Each rule is a TODO to remove as our implementation converges:
 
-- 5-dash separator → 3-dash (separator style difference)
 - Trailing whitespace trim
 
 ### Debugging Failures

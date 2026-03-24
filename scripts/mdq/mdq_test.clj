@@ -441,7 +441,7 @@
     (testing "ordered list match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "1. beta")))))
     (testing "ordered list preserves numbers in output"
-      (is (= "1. Alpha\n\n---\n\n2. Beta\n\n---\n\n3. Gamma"
+      (is (= "1. Alpha\n\n   -----\n\n2. Beta\n\n   -----\n\n3. Gamma"
              (mdq/emit-markdown (mdq/run-pipeline nodes "1.")))))
     (testing "ordered list filtered item preserves its number"
       (is (= "2. Beta"
@@ -763,7 +763,7 @@
           result (mdq/run-pipeline nodes "#")]
       (is (clojure.string/includes?
             (mdq/format-output result {:output "markdown"})
-            "---")))))
+            "   -----")))))
 
 (deftest json-footnotes-test
   (testing "JSON footnotes"
@@ -885,3 +885,4 @@
           idx-b (.indexOf output "# B")]
       (is (clojure.string/includes? output "[Link][1]"))
       (is (< idx1 idx-b)))))
+
