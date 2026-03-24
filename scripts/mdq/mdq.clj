@@ -685,15 +685,36 @@
     :link (str "[" (emit-inline-str (:content node)) "](" (get-in node [:attrs :href]) ")")
     :image (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")")
     :table (let [[head body] (:content node)
-                 emit-row (fn [row]
-                            (str "| " (str/join " | " (map (comp emit-inline-str :content)
-                                                           (:content row))) " |"))
                  head-row (first (:content head))
-                 col-count (count (:content head-row))
-                 aligns (or (:alignments node) (repeat col-count "none"))
-                 separator (str "| " (str/join " | " (map alignment->separator aligns)) " |")]
-             (str/join "\n" (concat [(emit-row head-row) separator]
-                                    (map emit-row (:content body)))))
+                 body-rows (:content body)
+                 all-rows (cons head-row body-rows)
+                 row-texts (mapv (fn [row]
+                                  (mapv (fn [cell] (emit-inline-str (:content cell)))
+                                        (:content row)))
+                                all-rows)
+                 max-cols (apply max (map count row-texts))
+                 row-texts (mapv (fn [texts]
+                                  (into texts (repeat (- max-cols (count texts)) "")))
+                                row-texts)
+                 col-widths (mapv (fn [col-idx]
+                                   (max 3 (apply max (map #(count (nth % col-idx)) row-texts))))
+                                 (range max-cols))
+                 aligns (let [a (vec (or (:alignments node) []))]
+                          (into a (repeat (- max-cols (count a)) "none")))
+                 pad-right (fn [s width]
+                             (let [pad (max 0 (- width (count s)))]
+                               (str s (apply str (repeat pad " ")))))
+                 make-sep (fn [align width]
+                            (case align
+                              "center" (str ":" (apply str (repeat width "-")) ":")
+                              "left" (str ":" (apply str (repeat (inc width) "-")))
+                              "right" (str (apply str (repeat (inc width) "-")) ":")
+                              (apply str (repeat (+ width 2) "-"))))
+                 format-row (fn [texts]
+                              (str "| " (str/join " | " (map pad-right texts col-widths)) " |"))
+                 sep-row (str "|" (str/join "|" (map make-sep aligns col-widths)) "|")]
+             (str/join "\n" (concat [(format-row (first row-texts)) sep-row]
+                                    (map format-row (rest row-texts)))))
     :block-formula (str "$$\n" (emit-inline-str (:content node)) "\n$$")
     :front-matter (let [delim (if (= :toml (:format node)) "+++" "---")]
                     (str delim "\n" (:raw node) "\n" delim))
