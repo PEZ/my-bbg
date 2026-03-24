@@ -5,37 +5,74 @@
             [clojure.walk :as walk]
             [nextjournal.markdown :as md]))
 
+(def ^:dynamic *selector-input* nil)
+
+(defn format-pest-error [{:keys [col end-col message input]}]
+  (let [col (or col 1)
+        input (or input "")
+        pointer-pad (apply str (repeat (dec col) " "))
+        pointer (if end-col
+                  (str "^" (apply str (repeat (max 0 (- end-col col)) "-")) "^")
+                  "^---")]
+    (str "Syntax error in select specifier:\n"
+         " --> 1:" col "\n"
+         "  |\n"
+         "1 | " input "\n"
+         "  | " pointer-pad pointer "\n"
+         "  |\n"
+         "  = " message)))
+
+(defn throw-parse-error [col message & {:keys [end-col]}]
+  (throw (ex-info message
+                  (cond-> {:type :parse-error
+                           :col col
+                           :message message
+                           :input *selector-input*}
+                    end-col (assoc :end-col end-col)))))
+
 (defn split-pipeline [s]
-  (loop [chars (seq s), current [], segments [], in-regex false, in-quote nil, prev-char nil]
-    (if-not chars
-      (let [seg (str/trim (apply str current))]
-        (cond-> segments
-          (seq seg) (conj seg)))
-      (let [c (first chars)]
-        (cond
-          ;; Regex start: / at token boundary (after space, |, start, or open paren)
-          (and (= c \/) (not in-quote) (not in-regex)
-               (or (nil? prev-char) (contains? #{\space \| \(} prev-char)))
-          (recur (next chars) (conj current c) segments true in-quote c)
+  (letfn [(segment-entry [segment-text start-offset]
+            (let [trimmed (str/trim segment-text)
+                  left-trim (- (count segment-text)
+                               (count (str/triml segment-text)))]
+              {:text trimmed
+               :offset (+ start-offset left-trim 1)}))]
+    (loop [chars (seq s), current [], current-start 0, idx 0,
+           segments [], in-regex false, in-quote nil, prev-char nil]
+      (if-not chars
+        (let [segment (segment-entry (apply str current) current-start)]
+          (cond-> segments
+            (seq (:text segment)) (conj segment)))
+        (let [c (first chars)]
+          (cond
+            ;; Regex start: / at token boundary (after space, |, start, or open paren)
+            (and (= c \/) (not in-quote) (not in-regex)
+                 (or (nil? prev-char) (contains? #{\space \| \(} prev-char)))
+            (recur (next chars) (conj current c) current-start (inc idx)
+                   segments true in-quote c)
 
-          ;; Regex end: / while in regex
-          (and (= c \/) (not in-quote) in-regex)
-          (recur (next chars) (conj current c) segments false in-quote c)
+            ;; Regex end: / while in regex
+            (and (= c \/) (not in-quote) in-regex)
+            (recur (next chars) (conj current c) current-start (inc idx)
+                   segments false in-quote c)
 
-          ;; Non-regex /: just a character (e.g., in </>)
-          (and (= c \/) (not in-quote) (not in-regex))
-          (recur (next chars) (conj current c) segments false in-quote c)
+            ;; Non-regex /: just a character (e.g., in </>)
+            (and (= c \/) (not in-quote) (not in-regex))
+            (recur (next chars) (conj current c) current-start (inc idx)
+                   segments false in-quote c)
 
-          (and (contains? #{\' \"} c) (not in-regex))
-          (recur (next chars) (conj current c) segments in-regex
-                 (if (= in-quote c) nil c) c)
+            (and (contains? #{\' \"} c) (not in-regex))
+            (recur (next chars) (conj current c) current-start (inc idx)
+                   segments in-regex (if (= in-quote c) nil c) c)
 
-          (and (= c \|) (not in-regex) (not in-quote))
-          (recur (next chars) [] (conj segments (str/trim (apply str current)))
-                 false nil c)
+            (and (= c \|) (not in-regex) (not in-quote))
+            (let [segment (segment-entry (apply str current) current-start)]
+              (recur (next chars) [] (inc idx) (inc idx)
+                     (conj segments segment) false nil c))
 
-          :else
-          (recur (next chars) (conj current c) segments in-regex in-quote c))))))
+            :else
+            (recur (next chars) (conj current c) current-start (inc idx)
+                   segments in-regex in-quote c)))))))
 
 (defn process-escape-sequences [s]
   (str/replace s #"\\([\"'`\\nrt]|u\{[0-9a-fA-F]+\})"
@@ -595,13 +632,16 @@
                   node))))))))
 
 (defn run-pipeline [nodes selector-str]
-  (let [segments (split-pipeline selector-str)
-        selectors (map parse-selector segments)
-        result (reduce (fn [nodes sel]
-                         ((selector->filter-fn sel) nodes))
-                       nodes
-                       selectors)]
-    (apply-replacements result selectors)))
+  (binding [*selector-input* selector-str]
+    (let [segments (split-pipeline selector-str)
+          selectors (mapv (fn [{:keys [text offset]}]
+                            (assoc (parse-selector text) :offset offset))
+                          segments)
+          result (reduce (fn [nodes sel]
+                           ((selector->filter-fn sel) nodes))
+                         nodes
+                         selectors)]
+      (apply-replacements result selectors))))
 
 (def ^:dynamic *emit-opts* nil)
 
@@ -1189,5 +1229,8 @@
               (System/exit 1))))
         (catch Exception e
           (binding [*out* *err*]
-            (println (str "Error: " (ex-message e))))
+            (let [error-data (ex-data e)]
+              (if (= :parse-error (:type error-data))
+                (println (format-pest-error error-data))
+                (println (str "Error: " (ex-message e))))))
           (System/exit 1))))))

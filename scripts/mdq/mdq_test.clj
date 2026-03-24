@@ -7,17 +7,52 @@
 
 (deftest split-pipeline-test
   (testing "simple split"
-    (is (= ["# A" "## B"] (mdq/split-pipeline "# A | ## B"))))
+    (is (= [{:text "# A" :offset 1}
+            {:text "## B" :offset 7}]
+           (mdq/split-pipeline "# A | ## B"))))
   (testing "single selector"
-    (is (= ["# A"] (mdq/split-pipeline "# A"))))
+    (is (= [{:text "# A" :offset 1}]
+           (mdq/split-pipeline "# A"))))
   (testing "preserves regex pipes"
-    (is (= ["# /a|b/"] (mdq/split-pipeline "# /a|b/"))))
+    (is (= [{:text "# /a|b/" :offset 1}]
+           (mdq/split-pipeline "# /a|b/"))))
   (testing "preserves quoted pipes"
-    (is (= ["# \"a|b\""] (mdq/split-pipeline "# \"a|b\""))))
+    (is (= [{:text "# \"a|b\"" :offset 1}]
+           (mdq/split-pipeline "# \"a|b\""))))
   (testing "empty input"
     (is (= [] (mdq/split-pipeline ""))))
-  (testing "trims whitespace"
-    (is (= ["# A" "## B"] (mdq/split-pipeline "  # A  |  ## B  ")))))
+  (testing "trims whitespace and keeps absolute offsets"
+    (is (= [{:text "# A" :offset 3}
+            {:text "## B" :offset 11}]
+           (mdq/split-pipeline "  # A  |  ## B  ")))))
+
+(deftest pest-error-formatting-test
+  (testing "single-column pointer"
+    (is (= "Syntax error in select specifier:\n --> 1:1\n  |\n1 | ~\n  | ^---\n  |\n  = expected valid query"
+           (mdq/format-pest-error {:col 1
+                                   :message "expected valid query"
+                                   :input "~"}))))
+  (testing "range pointer"
+    (is (= "Syntax error in select specifier:\n --> 1:7\n  |\n1 | # \"\\u{FFFFFF}\"\n  |       ^----^\n  |\n  = invalid unicode sequence: FFFFFF"
+           (mdq/format-pest-error {:col 7
+                                   :end-col 11
+                                   :message "invalid unicode sequence: FFFFFF"
+                                   :input "# \"\\u{FFFFFF}\""})))))
+
+(deftest throw-parse-error-test
+  (let [error (try
+                (binding [mdq/*selector-input* "# bad"]
+                  (mdq/throw-parse-error 3 "boom" :end-col 5))
+                (catch clojure.lang.ExceptionInfo e
+                  e))]
+    (is (instance? clojure.lang.ExceptionInfo error))
+    (is (= {:type :parse-error
+            :col 3
+            :end-col 5
+            :message "boom"
+            :input "# bad"}
+           (select-keys (ex-data error)
+                        [:type :col :end-col :message :input])))))
 
 (deftest parse-text-matcher-test
   (testing "nil/empty/wildcard returns nil"
