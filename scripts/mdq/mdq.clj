@@ -6,26 +6,36 @@
             [nextjournal.markdown :as md]))
 
 (defn split-pipeline [s]
-  (loop [chars (seq s), current [], segments [], in-regex false, in-quote nil]
+  (loop [chars (seq s), current [], segments [], in-regex false, in-quote nil, prev-char nil]
     (if-not chars
       (let [seg (str/trim (apply str current))]
         (cond-> segments
           (seq seg) (conj seg)))
       (let [c (first chars)]
         (cond
-          (and (= c \/) (not in-quote))
-          (recur (next chars) (conj current c) segments (not in-regex) in-quote)
+          ;; Regex start: / at token boundary (after space, |, start, or open paren)
+          (and (= c \/) (not in-quote) (not in-regex)
+               (or (nil? prev-char) (contains? #{\space \| \(} prev-char)))
+          (recur (next chars) (conj current c) segments true in-quote c)
+
+          ;; Regex end: / while in regex
+          (and (= c \/) (not in-quote) in-regex)
+          (recur (next chars) (conj current c) segments false in-quote c)
+
+          ;; Non-regex /: just a character (e.g., in </>)
+          (and (= c \/) (not in-quote) (not in-regex))
+          (recur (next chars) (conj current c) segments false in-quote c)
 
           (and (contains? #{\' \"} c) (not in-regex))
           (recur (next chars) (conj current c) segments in-regex
-                 (if (= in-quote c) nil c))
+                 (if (= in-quote c) nil c) c)
 
           (and (= c \|) (not in-regex) (not in-quote))
           (recur (next chars) [] (conj segments (str/trim (apply str current)))
-                 false nil)
+                 false nil c)
 
           :else
-          (recur (next chars) (conj current c) segments in-regex in-quote))))))
+          (recur (next chars) (conj current c) segments in-regex in-quote c))))))
 
 (defn process-escape-sequences [s]
   (let [sb (StringBuilder.)
@@ -445,8 +455,11 @@
                    :unordered #{:bullet-list}
                    :ordered #{:numbered-list}
                    #{:bullet-list :numbered-list})
-        items (->> (collect-nodes-deep type-set nodes)
-                   (mapcat extract-list-items))]
+        container-items (->> (collect-nodes-deep type-set nodes)
+                             (mapcat extract-list-items))
+        direct-items (->> nodes
+                          (filter #(and (map? %) (= :list-item (:type %)))))
+        items (concat container-items direct-items)]
     (cond->> items
       matcher (filter #(text-matches? matcher (md/node->text %))))))
 
@@ -455,17 +468,20 @@
         filtered-lists (if (= :ordered list-kind)
                          (filter #(contains? (:attrs %) :start) todo-lists)
                          (remove #(contains? (:attrs %) :start) todo-lists))
-        items (->> filtered-lists
-                   (mapcat (fn [tl]
-                             (let [ordered? (contains? (:attrs tl) :start)
-                                   start (get-in tl [:attrs :start] 1)]
-                               (map-indexed
-                                (fn [i item]
-                                  (if ordered?
-                                    (assoc-in item [:attrs :order] (+ start i))
-                                    item))
-                                (:content tl)))))
-                   (filter #(= :todo-item (:type %))))]
+        container-items (->> filtered-lists
+                             (mapcat (fn [tl]
+                                       (let [ordered? (contains? (:attrs tl) :start)
+                                             start (get-in tl [:attrs :start] 1)]
+                                         (map-indexed
+                                          (fn [i item]
+                                            (if ordered?
+                                              (assoc-in item [:attrs :order] (+ start i))
+                                              item))
+                                          (:content tl)))))
+                             (filter #(= :todo-item (:type %))))
+        direct-items (->> nodes
+                          (filter #(and (map? %) (= :todo-item (:type %)))))
+        items (concat container-items direct-items)]
     (cond->> items
       (= :unchecked task-kind) (filter #(not (get-in % [:attrs :checked])))
       (= :checked task-kind) (filter #(get-in % [:attrs :checked]))
