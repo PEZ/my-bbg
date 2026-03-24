@@ -6,11 +6,11 @@
             [clojure.walk :as walk]
             [nextjournal.markdown :as md]))
 
-(def ^:dynamic *selector-input* nil)
+(def ^:private ^:dynamic *selector-input* nil)
 
-(def ^:dynamic *selector-offset* 0)
+(def ^:private ^:dynamic *selector-offset* 0)
 
-(defn format-pest-error [{:keys [col end-col message input pointer-style]}]
+(defn- format-pest-error [{:keys [col end-col message input pointer-style]}]
   (let [col (or col 1)
         input (or input "")
         pointer-pad (apply str (repeat (dec col) " "))
@@ -34,7 +34,7 @@
          "  |\n"
          "  = " message)))
 
-(defn throw-parse-error [col message & {:keys [end-col pointer-style]}]
+(defn- throw-parse-error [col message & {:keys [end-col pointer-style]}]
   (let [absolute-col (+ *selector-offset* col)
         absolute-end-col (when end-col (+ *selector-offset* end-col))]
     (throw (ex-info message
@@ -45,7 +45,7 @@
                       absolute-end-col (assoc :end-col absolute-end-col)
                       pointer-style (assoc :pointer-style pointer-style))))))
 
-(defn split-pipeline [s]
+(defn- split-pipeline [s]
   (letfn [(segment-entry [segment-text start-offset]
             (let [trimmed (string/trim segment-text)
                   left-trim (- (count segment-text)
@@ -89,7 +89,7 @@
             (recur (next chars) (conj current c) current-start (inc idx)
                    segments in-regex in-quote c)))))))
 
-(defn process-escape-sequences
+(defn- process-escape-sequences
   ([s]
    (process-escape-sequences s 1))
   ([s start-col]
@@ -158,7 +158,7 @@
                              (conj pieces (:piece unicode-result))))
                  (throw-parse-error escaped-col valid-escape-message))))))))))
 
-(defn parse-text-matcher
+(defn- parse-text-matcher
   ([s]
    (parse-text-matcher s 1))
   ([s start-col]
@@ -255,7 +255,7 @@
                  anchored-end (fn [text] (string/ends-with? (string/lower-case text) text-lower))
                  :else (fn [text] (string/includes? (string/lower-case text) text-lower)))))))))))
 
-(defn text-matches? [matcher text]
+(defn- text-matches? [matcher text]
   (if (map? matcher)
     ((:match-fn matcher) text)
     (matcher text)))
@@ -310,7 +310,7 @@
 
 
 
-(defn parse-selector [s]
+(defn- parse-selector [s]
   (let [s (string/trim s)
         table-parts (when (string/starts-with? s ":-:")
                       (string/split s #":-:" -1))
@@ -528,7 +528,7 @@
                  :body (subvec nodes-vec (inc idx) end)}))))
          vec)))
 
-(defn slice-sections [{:keys [level level-range]} nodes]
+(defn- slice-sections [{:keys [level level-range]} nodes]
   (cond
     level-range
     (let [[lo hi] level-range
@@ -581,12 +581,12 @@
     :else
     (top-level-sections nodes)))
 
-(def result-separator
+(def ^:private result-separator
   "Sentinel node interposed between results by filter functions.
    emit-markdown uses these to place --- separators."
   {:type :result-separator})
 
-(defn strip-separators
+(defn- strip-separators
   "Remove result-separator sentinels from nodes."
   [nodes]
   (remove #(= :result-separator (:type %)) nodes))
@@ -602,7 +602,7 @@
          vec)
     [(vec nodes)]))
 
-(defn section-filter [{:keys [level level-range matcher] :as selector} nodes]
+(defn- section-filter [{:keys [level level-range matcher] :as selector} nodes]
   (let [sections (if (and (nil? level) (nil? level-range) matcher)
                    (find-sections-by-text matcher nodes)
                    (slice-sections selector nodes))]
@@ -621,14 +621,14 @@
          (interpose [result-separator])
          (apply concat))))
 
-(defn walk-ast
+(defn- walk-ast
   "Lazy depth-first pre-order traversal of AST nodes."
   [nodes]
   (tree-seq (fn [n] (and (map? n) (seq (:content n))))
             :content
             {:type :root :content nodes}))
 
-(defn collect-nodes-deep [types nodes]
+(defn- collect-nodes-deep [types nodes]
   (->> (walk-ast nodes)
        (filterv #(contains? types (:type %)))))
 
@@ -643,7 +643,7 @@
               item)))
          (filter #(= :list-item (:type %))))))
 
-(defn list-filter [{:keys [list-kind matcher]} nodes]
+(defn- list-filter [{:keys [list-kind matcher]} nodes]
   (let [type-set (case list-kind
                    :unordered #{:bullet-list}
                    :ordered #{:numbered-list}
@@ -656,7 +656,7 @@
     (cond->> items
       matcher (filter #(text-matches? matcher (md/node->text %))))))
 
-(defn task-filter [{:keys [task-kind list-kind matcher]} nodes]
+(defn- task-filter [{:keys [task-kind list-kind matcher]} nodes]
   (let [todo-lists (collect-nodes-deep #{:todo-list} nodes)
         filtered-lists (if (= :ordered list-kind)
                          (filter #(contains? (:attrs %) :start) todo-lists)
@@ -708,13 +708,13 @@
                             preds)))]
     (into [] xform (walk-ast nodes))))
 
-(defn front-matter-filter [{:keys [format matcher]} nodes]
+(defn- front-matter-filter [{:keys [format matcher]} nodes]
   (let [fm-nodes (collect-nodes-deep #{:front-matter} nodes)]
     (cond->> fm-nodes
       format (filter #(= format (:format %)))
       matcher (filter #(text-matches? matcher (or (:raw %) ""))))))
 
-(defn rebuild-table [table col-idxs matched-rows]
+(defn- rebuild-table [table col-idxs matched-rows]
   (let [select-cols (fn [{:keys [content] :as row}]
                       (assoc row :content (mapv #(nth content %) col-idxs)))
         [head body] (:content table)
@@ -736,7 +736,7 @@
                   (string/ends-with? content "|") (subs 0 (dec (count content))))]
     (mapv string/trim (string/split content #"\|"))))
 
-(defn normalize-table-from-raw
+(defn- normalize-table-from-raw
   "Given a table node with :raw-table, parses raw cells and rebuilds
    the table AST with all columns (including extra body columns)."
   [table]
@@ -789,7 +789,7 @@
           (dissoc :raw-table)))
     table))
 
-(defn table-filter [{:keys [col-matcher row-matcher]} nodes]
+(defn- table-filter [{:keys [col-matcher row-matcher]} nodes]
   (let [tables (collect-nodes-deep #{:table} nodes)]
     (for [table tables
           :let [table (if (:raw-table table)
@@ -816,7 +816,7 @@
    :front-matter front-matter-filter
    :table table-filter})
 
-(defn selector->filter-fn [selector]
+(defn- selector->filter-fn [selector]
   (let [selector-type (:type selector)]
     (cond
       (= :section selector-type)
@@ -905,7 +905,7 @@
       node)))
 
 
-(defn apply-replacements [results selectors]
+(defn- apply-replacements [results selectors]
   (let [text-replacements (into [] (keep #(-> % :matcher :replace)) selectors)
         url-replacements (into [] (keep #(-> % :url-matcher :replace)) selectors)
         lang-replacements (into [] (keep #(-> % :language-matcher :replace)) selectors)
@@ -948,7 +948,7 @@
                   node))))))))
 
 
-(defn run-pipeline [nodes selector-str]
+(defn- run-pipeline [nodes selector-str]
   (binding [*selector-input* selector-str]
     (let [segments (split-pipeline selector-str)
           selectors (mapv (fn [{:keys [text offset]}]
@@ -970,11 +970,11 @@
                          selectors)]
       (apply-replacements result selectors))))
 
-(def ^:dynamic *emit-opts* nil)
+(def ^:private ^:dynamic *emit-opts* nil)
 
 (declare emit-inline-str)
 
-(defn ref-key-comparator
+(defn- ref-key-comparator
   "Comparator for reference keys that handles mixed numeric/string types.
    Numbers sort before strings, strings sort case-insensitively."
   [a b]
@@ -986,7 +986,7 @@
       b-num 1
       :else (compare (string/lower-case (str a)) (string/lower-case (str b))))))
 
-(defn detect-link-forms
+(defn- detect-link-forms
   "Detects the original form of each link in the raw markdown.
    Returns a map of [text href] -> {:form :inline/:reference/:collapsed/:shortcut
                                      :ref-id :title :title-quote}"
@@ -1104,7 +1104,7 @@
       (str "[" text "](" href " " title-quote title title-quote ")")
       (str "[" text "](" href ")"))))
 
-(defn emit-inline [node]
+(defn- emit-inline [node]
   (case (:type node)
     :text (:text node)
     :softbreak "\n"
@@ -1155,7 +1155,7 @@
       (emit-inline-str content)
       (or (:text node) ""))))
 
-(defn extract-table-alignments [markdown-text]
+(defn- extract-table-alignments [markdown-text]
   (let [lines (string/split-lines markdown-text)]
     (->> lines
          (filter #(re-matches #"\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*" %))
@@ -1170,7 +1170,7 @@
                                   (string/ends-with? cell ":") "right"
                                   :else "none"))))))))))
 
-(defn attach-table-alignments [nodes alignments-seq]
+(defn- attach-table-alignments [nodes alignments-seq]
   (:nodes
    (reduce (fn [{:keys [idx nodes]} node]
              (if (= :table (:type node))
@@ -1187,14 +1187,14 @@
 (defn- content-text [node]
   (string/join (keep :text (:content node))))
 
-(defn extract-raw-tables [markdown-text]
+(defn- extract-raw-tables [markdown-text]
   (let [lines (string/split-lines markdown-text)]
     (->> (map-indexed vector lines)
          (partition-by (fn [[_ line]] (string/starts-with? (string/trim line) "|")))
          (filter (fn [group] (string/starts-with? (string/trim (second (first group))) "|")))
          (mapv (fn [group] (string/join "\n" (map second group)))))))
 
-(defn attach-raw-tables [nodes raw-tables]
+(defn- attach-raw-tables [nodes raw-tables]
   (:nodes
    (reduce (fn [{:keys [idx nodes]} node]
              (if (= :table (:type node))
@@ -1207,7 +1207,7 @@
            {:idx 0 :nodes []}
            nodes)))
 
-(defn emit-node [node]
+(defn- emit-node [node]
   (case (:type node)
     :heading (str (apply str (repeat (:heading-level node) "#")) " "
                   (emit-inline-str (:content node)))
@@ -1308,7 +1308,7 @@
           []
           nodes))
 
-(defn format-ref-definitions [refs-map]
+(defn- format-ref-definitions [refs-map]
   (when (seq refs-map)
     (string/join "\n"
               (map (fn [[n {:keys [url title title-quote]}]]
@@ -1358,7 +1358,7 @@
         (recur (concat (rest queue) new-refs)
                (into seen new-refs))))))
 
-(defn format-footnote-definitions [footnote-label->num-atom footnotes-by-label renumber?]
+(defn- format-footnote-definitions [footnote-label->num-atom footnotes-by-label renumber?]
   (when (seq @footnote-label->num-atom)
     (let [emit-fn-body (fn [fn-def]
                          (string/join "\n\n" (map (fn [block]
@@ -1403,7 +1403,7 @@
                                                      :title-quote (first quote)))))
                  (sorted-map)))))
 
-(defn emit-markdown
+(defn- emit-markdown
   ([nodes] (emit-markdown nodes nil))
   ([nodes opts]
    (let [raw-md (:raw-md opts)
@@ -1505,7 +1505,7 @@
 
 (declare nodes->items)
 
-(defn node->item [node]
+(defn- node->item [node]
   (case (:type node)
     :heading
     {:section {:depth (:heading-level node)
@@ -1586,7 +1586,7 @@
       {:paragraph (emit-inline-str content)}
       {})))
 
-(defn nodes->items [nodes]
+(defn- nodes->items [nodes]
   (loop [remaining (seq nodes), result [], current-section nil]
     (if-not remaining
       (if current-section
@@ -1703,7 +1703,7 @@
     (when (seq entries)
       (into (sorted-map) entries))))
 
-(defn format-output [nodes opts]
+(defn- format-output [nodes opts]
   (let [output-kw (keyword (or (:output opts) "markdown"))
         output-kw (if (= :md output-kw) :markdown output-kw)]
     (case output-kw
@@ -1776,7 +1776,7 @@
                               footnotes (assoc :footnotes footnotes))]
                  (with-out-str (pp/pprint result))))))))
 
-(defn pre-process-front-matter [input]
+(defn- pre-process-front-matter [input]
   (let [lines (string/split-lines input)]
     (cond
       ;; YAML front matter
@@ -1870,7 +1870,7 @@
   [text width]
   (string/join "\n" (map #(wrap-line % width) (string/split text #"\n" -1))))
 
-(defn parse-args [args]
+(defn- parse-args [args]
   (loop [remaining (seq args)
          opts {}
          selector nil
@@ -1956,7 +1956,7 @@
             (recur (next remaining) opts arg files)))))))
 
 
-(defn process
+(defn- process
   "Processes markdown input with given args. Returns a map with:
    :output  - the formatted output string (or nil)
    :exit    - suggested exit code (0 for success, 1 for no results)
@@ -2047,4 +2047,3 @@
     (when output (println output))
     (when error (binding [*out* *err*] (println error)))
     (System/exit exit)))
-
