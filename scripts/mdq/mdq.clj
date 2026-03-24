@@ -158,102 +158,116 @@
                              (conj pieces (:piece unicode-result))))
                  (throw-parse-error escaped-col valid-escape-message))))))))))
 
+(defn- validate-matcher-syntax! [matcher start-col]
+  (let [anchored-start (string/starts-with? matcher "^")
+        anchored-end (string/ends-with? matcher "$")
+        without-start (if anchored-start (subs matcher 1) matcher)
+        candidate (if anchored-end
+                    (subs without-start 0 (dec (count without-start)))
+                    without-start)
+        candidate-col (+ start-col (if anchored-start 1 0))
+        candidate-first (first candidate)]
+    (cond
+      (and (seq candidate)
+           (or (= \" candidate-first)
+               (= \' candidate-first))
+           (not= (last candidate) candidate-first))
+      (throw-parse-error (+ candidate-col (count candidate))
+                         "expected character in quoted string")
+
+      (and (string/starts-with? candidate "/")
+           (not (string/ends-with? candidate "/")))
+      (throw-parse-error (+ candidate-col (count candidate))
+                         "expected regex character"))))
+
+(defn- regex-parse-error-message [pattern description]
+  (if (re-find #"\\[pP]\{[^}]*$" pattern)
+    "regex parse error: Unicode escape not closed"
+    (str "regex parse error: " description)))
+
+(defn- compile-matcher-regex [pattern pattern-col]
+  (try
+    (re-pattern pattern)
+    (catch java.util.regex.PatternSyntaxException e
+      (throw-parse-error pattern-col
+                         (regex-parse-error-message pattern (.getDescription e))
+                         :pointer-style :point))))
+
+(defn- parse-regex-replace-matcher [s start-col]
+  (let [rest-s (subs s 3)
+        sep-idx (string/index-of rest-s "/")
+        pattern-str (subs rest-s 0 sep-idx)
+        after-sep (subs rest-s (inc sep-idx))
+        replacement (if (string/ends-with? after-sep "/")
+                      (subs after-sep 0 (dec (count after-sep)))
+                      after-sep)
+        pattern (compile-matcher-regex pattern-str (+ start-col 3))]
+    {:match-fn (fn [text] (re-find pattern text))
+     :replace {:pattern pattern
+               :replacement replacement}}))
+
+(defn- parse-regex-matcher [s start-col]
+  (let [pattern (compile-matcher-regex (subs s 1 (dec (count s)))
+                                       (inc start-col))]
+    (fn [text] (some? (re-find pattern text)))))
+
+(defn- strip-anchor-markers [s]
+  (let [anchored-start (string/starts-with? s "^")
+        anchored-end (string/ends-with? s "$")
+        s1 (cond-> s
+             anchored-start (subs 1)
+             anchored-end (subs 0 (- (count (cond-> s anchored-start (subs 1))) 1)))]
+    {:anchored-start anchored-start
+     :anchored-end anchored-end
+     :text (string/trim s1)}))
+
+(defn- build-quoted-matcher [inner anchored-start anchored-end]
+  (cond
+    (and anchored-start anchored-end) (fn [text] (= text inner))
+    anchored-start (fn [text] (string/starts-with? text inner))
+    anchored-end (fn [text] (string/ends-with? text inner))
+    :else (fn [text] (string/includes? text inner))))
+
+(defn- build-unquoted-matcher [inner anchored-start anchored-end]
+  (let [text-lower (string/lower-case inner)]
+    (cond
+      (and anchored-start anchored-end) (fn [text] (= (string/lower-case text) text-lower))
+      anchored-start (fn [text] (string/starts-with? (string/lower-case text) text-lower))
+      anchored-end (fn [text] (string/ends-with? (string/lower-case text) text-lower))
+      :else (fn [text] (string/includes? (string/lower-case text) text-lower)))))
+
 (defn- parse-text-matcher
   ([s]
    (parse-text-matcher s 1))
   ([s start-col]
    (when (and s (not= s "") (not= s "*"))
-     (letfn [(validate-unclosed! [matcher]
-               (let [anchored-start (string/starts-with? matcher "^")
-                     anchored-end (string/ends-with? matcher "$")
-                     without-start (if anchored-start
-                                     (subs matcher 1)
-                                     matcher)
-                     candidate (if anchored-end
-                                 (subs without-start 0 (dec (count without-start)))
-                                 without-start)
-                     candidate-col (+ start-col (if anchored-start 1 0))
-                     candidate-first (first candidate)]
-                 (cond
-                   (and (seq candidate)
-                        (or (= \" candidate-first)
-                            (= \' candidate-first))
-                        (not= (last candidate) candidate-first))
-                   (throw-parse-error (+ candidate-col (count candidate))
-                                      "expected character in quoted string")
+     (validate-matcher-syntax! s start-col)
+     (cond
+       (string/starts-with? s "!s/")
+       (parse-regex-replace-matcher s start-col)
 
-                   (and (string/starts-with? candidate "/")
-                        (not (string/ends-with? candidate "/")))
-                   (throw-parse-error (+ candidate-col (count candidate))
-                                      "expected regex character"))))
-             (regex-parse-error-message [pattern description]
-               (if (re-find #"\\[pP]\{[^}]*$" pattern)
-                 "regex parse error: Unicode escape not closed"
-                 (str "regex parse error: " description)))
-             (compile-regex [pattern pattern-col]
-               (try
-                 (re-pattern pattern)
-                 (catch java.util.regex.PatternSyntaxException e
-                   (throw-parse-error pattern-col
-                                      (regex-parse-error-message pattern (.getDescription e))
-                                      :pointer-style :point))))]
-       (validate-unclosed! s)
-       (cond
-         ;; Regex replace: !s/pattern/replacement/
-         (string/starts-with? s "!s/")
-         (let [rest-s (subs s 3)
-               sep-idx (string/index-of rest-s "/")
-               pattern-str (subs rest-s 0 sep-idx)
-               after-sep (subs rest-s (inc sep-idx))
-               replacement (if (string/ends-with? after-sep "/")
-                             (subs after-sep 0 (dec (count after-sep)))
-                             after-sep)
-               pattern (compile-regex pattern-str (+ start-col 3))]
-           {:match-fn (fn [text] (re-find pattern text))
-            :replace {:pattern pattern
-                      :replacement replacement}})
+       (and (string/starts-with? s "/") (string/ends-with? s "/"))
+       (parse-regex-matcher s start-col)
 
-         ;; Regex: /pattern/
-         (and (string/starts-with? s "/") (string/ends-with? s "/"))
-         (let [pattern (compile-regex (subs s 1 (dec (count s)))
-                                      (inc start-col))]
-           (fn [text] (some? (re-find pattern text))))
-
-         ;; All other cases: strip anchors first, then detect quoting
-         :else
-         (let [anchored-start (string/starts-with? s "^")
-               anchored-end (string/ends-with? s "$")
-               s1 (cond-> s
-                    anchored-start (subs 1)
-                    anchored-end (subs 0 (- (count (cond-> s anchored-start (subs 1))) 1)))
-               s1 (string/trim s1)
-               quote-char (when (>= (count s1) 2)
-                            (let [fc (first s1)]
-                              (when (and (or (= \" fc)
-                                             (= \' fc))
-                                         (= fc (last s1)))
-                                fc)))
-               quoted? (some? quote-char)
-               inner-start-col (+ start-col (if anchored-start 1 0) 1)
-               inner (if quoted?
-                       (process-escape-sequences (subs s1 1 (dec (count s1)))
-                                                 inner-start-col)
-                       s1)]
-           (when (and (not quoted?) (string/starts-with? inner "<"))
-             (throw-parse-error start-col
-                                "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
-           (if quoted?
-             (cond
-               (and anchored-start anchored-end) (fn [text] (= text inner))
-               anchored-start (fn [text] (string/starts-with? text inner))
-               anchored-end (fn [text] (string/ends-with? text inner))
-               :else (fn [text] (string/includes? text inner)))
-             (let [text-lower (string/lower-case inner)]
-               (cond
-                 (and anchored-start anchored-end) (fn [text] (= (string/lower-case text) text-lower))
-                 anchored-start (fn [text] (string/starts-with? (string/lower-case text) text-lower))
-                 anchored-end (fn [text] (string/ends-with? (string/lower-case text) text-lower))
-                 :else (fn [text] (string/includes? (string/lower-case text) text-lower)))))))))))
+       :else
+       (let [{:keys [anchored-start anchored-end text]} (strip-anchor-markers s)
+             quote-char (when (>= (count text) 2)
+                          (let [fc (first text)]
+                            (when (and (or (= \" fc) (= \' fc))
+                                       (= fc (last text)))
+                              fc)))
+             quoted? (some? quote-char)
+             inner-start-col (+ start-col (if anchored-start 1 0) 1)
+             inner (if quoted?
+                     (process-escape-sequences (subs text 1 (dec (count text)))
+                                               inner-start-col)
+                     text)]
+         (when (and (not quoted?) (string/starts-with? inner "<"))
+           (throw-parse-error start-col
+                              "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
+         (if quoted?
+           (build-quoted-matcher inner anchored-start anchored-end)
+           (build-unquoted-matcher inner anchored-start anchored-end)))))))
 
 (defn- text-matches? [matcher text]
   (if (map? matcher)
@@ -308,7 +322,116 @@
      :col-matcher (parse-text-matcher col-text)
      :row-matcher (parse-text-matcher row-text)}))
 
+(defn- parse-section-selector [s]
+  (let [range-match (re-find #"^#\{(\d*)(,?)(\d*)\}(.*)" s)]
+    (if range-match
+      (let [[_ lo-str comma hi-str rest-text] range-match
+            lo (when (seq lo-str) (parse-long lo-str))
+            hi (when (seq hi-str) (parse-long hi-str))
+            has-comma (= "," comma)
+            level-range (cond
+                          (and lo (not has-comma)) [lo lo]
+                          (and lo hi) [lo hi]
+                          (and lo has-comma (not hi)) [lo 6]
+                          (and (not lo) has-comma hi) [1 hi])
+            text-col (+ (count s) 1 (- (count rest-text)))
+            text (string/trim rest-text)]
+        {:type :section
+         :level-range level-range
+         :matcher (parse-text-matcher text text-col)})
+      (let [hashes (re-find #"^#+" s)
+            level (count hashes)
+            next-char (nth s level nil)]
+        (when (and next-char
+                   (not (Character/isWhitespace ^char next-char))
+                   (not= next-char \{))
+          (throw-parse-error (inc level)
+                             "expected end of input, space, or section options"))
+        (let [text-col (matcher-start-col level s)
+              text (string/trim (subs s level))]
+          (when (string/starts-with? text "$")
+            (throw-parse-error text-col
+                               "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
+          {:type :section
+           :level (when (> level 1) level)
+           :matcher (parse-text-matcher text text-col)})))))
 
+(defn- parse-task-item-selector [s]
+  (let [marker-end (string/index-of s "]")
+        marker (when marker-end (subs s 2 (inc marker-end)))]
+    (if (contains? #{"[x]" "[ ]" "[?]"} marker)
+      (let [text-col (matcher-start-col (+ 2 (count marker)) s)
+            text (string/trim (subs s (+ 2 (count marker))))
+            task-kind (case marker
+                        "[x]" :checked
+                        "[ ]" :unchecked
+                        "[?]" :any)]
+        {:type :task
+         :task-kind task-kind
+         :matcher (parse-text-matcher text text-col)})
+      (throw-parse-error 4 "expected \"[x]\", \"[x]\", or \"[?]\""))))
+
+(defn- parse-ordered-list-selector [s]
+  (let [text-col (matcher-start-col 2 s)
+        text (string/trim (subs s 2))
+        task-match (re-find #"^\[[ x?]\]" text)]
+    (if task-match
+      (let [marker (subs text 0 3)
+            rest-col (+ (dec text-col) (matcher-start-col 3 text))
+            task-kind (case marker
+                        "[x]" :checked
+                        "[ ]" :unchecked
+                        "[?]" :any)
+            rest-text (string/trim (subs text 3))]
+        {:type :task
+         :task-kind task-kind
+         :list-kind :ordered
+         :matcher (parse-text-matcher rest-text rest-col)})
+      {:type :list-item
+       :list-kind :ordered
+       :matcher (parse-text-matcher text text-col)})))
+
+(defn- parse-code-block-selector [s]
+  (let [rest-raw (subs s 3)
+        has-space (string/starts-with? rest-raw " ")
+        rest-col (matcher-start-col 3 s)
+        rest-s (string/trim rest-raw)
+        [lang text] (when (seq rest-s) (string/split rest-s #"\s+" 2))
+        text-col (when (and lang text)
+                   (+ (dec rest-col) (matcher-start-col (count lang) rest-s)))]
+    (if (and has-space (nil? text))
+      {:type :code
+       :language-matcher nil
+       :matcher (parse-text-matcher lang rest-col)}
+      {:type :code
+       :language-matcher (parse-text-matcher lang rest-col)
+       :matcher (parse-text-matcher text text-col)})))
+
+(defn- parse-image-selector [s]
+  (let [close-bracket (string/index-of s "](")
+        alt-text (when close-bracket (subs s 2 close-bracket))
+        after (when close-bracket (subs s (+ 2 close-bracket)))
+        end-paren (when after (string/last-index-of after ")"))
+        url-col (when close-bracket (+ close-bracket 3))
+        url-text (when end-paren (subs after 0 end-paren))]
+    (when (and close-bracket after (nil? end-paren))
+      (throw-parse-error (inc (count s)) "expected \"$\""))
+    {:type :image
+     :matcher (parse-text-matcher (some-> alt-text string/trim) 3)
+     :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)}))
+
+(defn- parse-link-selector [s]
+  (let [close-bracket (string/index-of s "](")
+        display-text (when close-bracket (subs s 1 close-bracket))
+        after (when close-bracket (subs s (+ 2 close-bracket)))
+        end-paren (when after (string/last-index-of after ")"))
+        url-col (when close-bracket (+ close-bracket 3))
+        url-text (when end-paren (subs after 0 end-paren))]
+    (when (and close-bracket after (nil? end-paren))
+      (throw-parse-error (inc (count s)) "expected \"$\""))
+    {:type :link
+     :matcher (parse-text-matcher (some-> display-text string/trim) 2)
+     :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)}))
 
 (defn- parse-selector [s]
   (let [s (string/trim s)
@@ -329,73 +452,13 @@
       (throw-parse-error 1 "expected valid query")
 
       (string/starts-with? s "#")
-      (let [range-match (re-find #"^#\{(\d*)(,?)(\d*)\}(.*)" s)]
-        (if range-match
-          (let [[_ lo-str comma hi-str rest-text] range-match
-                lo (when (seq lo-str) (parse-long lo-str))
-                hi (when (seq hi-str) (parse-long hi-str))
-                has-comma (= "," comma)
-                level-range (cond
-                              (and lo (not has-comma)) [lo lo]
-                              (and lo hi) [lo hi]
-                              (and lo has-comma (not hi)) [lo 6]
-                              (and (not lo) has-comma hi) [1 hi])
-                text-col (+ (count s) 1 (- (count rest-text)))
-                text (string/trim rest-text)]
-            {:type :section
-             :level-range level-range
-             :matcher (parse-text-matcher text text-col)})
-          (let [hashes (re-find #"^#+" s)
-                level (count hashes)
-                next-char (nth s level nil)]
-            (when (and next-char
-                       (not (Character/isWhitespace ^char next-char))
-                       (not= next-char \{))
-              (throw-parse-error (inc level)
-                                 "expected end of input, space, or section options"))
-            (let [text-col (matcher-start-col level s)
-                  text (string/trim (subs s level))]
-              (when (string/starts-with? text "$")
-                (throw-parse-error text-col
-                                   "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
-              {:type :section
-               :level (when (> level 1) level)
-               :matcher (parse-text-matcher text text-col)}))))
+      (parse-section-selector s)
 
       (string/starts-with? s "- [")
-      (let [marker-end (string/index-of s "]")
-            marker (when marker-end (subs s 2 (inc marker-end)))]
-        (if (contains? #{"[x]" "[ ]" "[?]"} marker)
-          (let [text-col (matcher-start-col (+ 2 (count marker)) s)
-                text (string/trim (subs s (+ 2 (count marker))))
-                task-kind (case marker
-                            "[x]" :checked
-                            "[ ]" :unchecked
-                            "[?]" :any)]
-            {:type :task
-             :task-kind task-kind
-             :matcher (parse-text-matcher text text-col)})
-          (throw-parse-error 4 "expected \"[x]\", \"[x]\", or \"[?]\"")))
+      (parse-task-item-selector s)
 
       (string/starts-with? s "1.")
-      (let [text-col (matcher-start-col 2 s)
-            text (string/trim (subs s 2))
-            task-match (re-find #"^\[[ x?]\]" text)]
-        (if task-match
-          (let [marker (subs text 0 3)
-                rest-col (+ (dec text-col) (matcher-start-col 3 text))
-                task-kind (case marker
-                            "[x]" :checked
-                            "[ ]" :unchecked
-                            "[?]" :any)
-                rest-text (string/trim (subs text 3))]
-            {:type :task
-             :task-kind task-kind
-             :list-kind :ordered
-             :matcher (parse-text-matcher rest-text rest-col)})
-          {:type :list-item
-           :list-kind :ordered
-           :matcher (parse-text-matcher text text-col)}))
+      (parse-ordered-list-selector s)
 
       (string/starts-with? s "- ")
       (let [text-col (matcher-start-col 2 s)
@@ -416,46 +479,13 @@
          :matcher (parse-text-matcher text text-col)})
 
       (string/starts-with? s "```")
-      (let [rest-raw (subs s 3)
-            has-space (string/starts-with? rest-raw " ")
-            rest-col (matcher-start-col 3 s)
-            rest-s (string/trim rest-raw)
-            [lang text] (when (seq rest-s) (string/split rest-s #"\s+" 2))
-            text-col (when (and lang text)
-                       (+ (dec rest-col) (matcher-start-col (count lang) rest-s)))]
-        (if (and has-space (nil? text))
-          {:type :code
-           :language-matcher nil
-           :matcher (parse-text-matcher lang rest-col)}
-          {:type :code
-           :language-matcher (parse-text-matcher lang rest-col)
-           :matcher (parse-text-matcher text text-col)}))
+      (parse-code-block-selector s)
 
       (string/starts-with? s "![")
-      (let [close-bracket (string/index-of s "](")
-            alt-text (when close-bracket (subs s 2 close-bracket))
-            after (when close-bracket (subs s (+ 2 close-bracket)))
-            end-paren (when after (string/last-index-of after ")"))
-            url-col (when close-bracket (+ close-bracket 3))
-            url-text (when end-paren (subs after 0 end-paren))]
-        (when (and close-bracket after (nil? end-paren))
-          (throw-parse-error (inc (count s)) "expected \"$\""))
-        {:type :image
-         :matcher (parse-text-matcher (some-> alt-text string/trim) 3)
-         :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)})
+      (parse-image-selector s)
 
       (string/starts-with? s "[")
-      (let [close-bracket (string/index-of s "](")
-            display-text (when close-bracket (subs s 1 close-bracket))
-            after (when close-bracket (subs s (+ 2 close-bracket)))
-            end-paren (when after (string/last-index-of after ")"))
-            url-col (when close-bracket (+ close-bracket 3))
-            url-text (when end-paren (subs after 0 end-paren))]
-        (when (and close-bracket after (nil? end-paren))
-          (throw-parse-error (inc (count s)) "expected \"$\""))
-        {:type :link
-         :matcher (parse-text-matcher (some-> display-text string/trim) 2)
-         :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)})
+      (parse-link-selector s)
 
       (string/starts-with? s "</>")
       (let [text-col (matcher-start-col 3 s)
@@ -736,6 +766,46 @@
                   (string/ends-with? content "|") (subs 0 (dec (count content))))]
     (mapv string/trim (string/split content #"\|"))))
 
+(defn- find-separator-row-index
+  "Find the index of the separator row (cells matching :?-+:?)."
+  [cells-by-row]
+  (first (keep-indexed
+          (fn [i cells]
+            (when (every? #(re-matches #"\s*:?-+:?\s*" %) cells)
+              i))
+          cells-by-row)))
+
+(defn- parse-cell-alignment
+  "Parse alignment from a separator cell."
+  [cell]
+  (let [t (string/trim cell)]
+    (cond
+      (and (string/starts-with? t ":") (string/ends-with? t ":")) "center"
+      (string/starts-with? t ":") "left"
+      (string/ends-with? t ":") "right"
+      :else "none")))
+
+(defn- parse-alignments
+  "Parse alignments from separator cells, padding to max-cols with 'none'."
+  [sep-cells max-cols]
+  (when sep-cells
+    (into (mapv parse-cell-alignment sep-cells)
+          (repeat (- max-cols (count sep-cells)) "none"))))
+
+(defn- pad-row-to-length
+  "Pad a row vector to the desired length with empty strings."
+  [row target-length]
+  (into (vec row)
+        (repeat (- target-length (count row)) "")))
+
+(defn- make-inline-cell
+  "Build a table cell node with inline content from text."
+  [type text]
+  {:type type
+   :content (if (string/blank? text)
+              []
+              (-> (md/parse text) :content first :content (or [])))})
+
 (defn- normalize-table-from-raw
   "Given a table node with :raw-table, parses raw cells and rebuilds
    the table AST with all columns (including extra body columns)."
@@ -743,37 +813,16 @@
   (if-let [raw (:raw-table table)]
     (let [lines (string/split-lines raw)
           all-cells (mapv parse-table-row-cells lines)
-          sep-idx (first (keep-indexed
-                          (fn [i cells]
-                            (when (every? #(re-matches #"\s*:?-+:?\s*" %) cells) i))
-                          all-cells))
+          sep-idx (find-separator-row-index all-cells)
           header-cells (first all-cells)
           body-cell-rows (if sep-idx
                            (subvec all-cells (inc sep-idx))
                            (subvec all-cells 1))
           max-cols (apply max (count header-cells) (map count body-cell-rows))
-          padded-header (into (vec header-cells)
-                              (repeat (- max-cols (count header-cells)) ""))
-          padded-body (mapv (fn [row]
-                              (into (vec row)
-                                    (repeat (- max-cols (count row)) "")))
-                            body-cell-rows)
+          padded-header (pad-row-to-length header-cells max-cols)
+          padded-body (mapv #(pad-row-to-length % max-cols) body-cell-rows)
           sep-cells (when sep-idx (nth all-cells sep-idx))
-          alignments (when sep-cells
-                       (into (mapv (fn [cell]
-                                     (let [t (string/trim cell)]
-                                       (cond
-                                         (and (string/starts-with? t ":") (string/ends-with? t ":")) "center"
-                                         (string/starts-with? t ":") "left"
-                                         (string/ends-with? t ":") "right"
-                                         :else "none")))
-                                   sep-cells)
-                             (repeat (- max-cols (count sep-cells)) "none")))
-          make-inline-cell (fn [type text]
-                             {:type type
-                              :content (if (string/blank? text)
-                                         []
-                                         (-> (md/parse text) :content first :content (or [])))})]
+          alignments (parse-alignments sep-cells max-cols)]
       (-> table
           (assoc :content
                  [{:type :table-head
@@ -904,7 +953,6 @@
           node))
       node)))
 
-
 (defn- apply-replacements [results selectors]
   (let [text-replacements (into [] (keep #(-> % :matcher :replace)) selectors)
         url-replacements (into [] (keep #(-> % :url-matcher :replace)) selectors)
@@ -946,7 +994,6 @@
                 (if (and (map? node) (= :code (:type node)) (:language node))
                   (update node :language lang-xf)
                   node))))))))
-
 
 (defn- run-pipeline [nodes selector-str]
   (binding [*selector-input* selector-str]
@@ -1104,6 +1151,46 @@
       (str "[" text "](" href " " title-quote title title-quote ")")
       (str "[" text "](" href ")"))))
 
+(defn- emit-footnote-ref [label]
+  (if-let [label->num (:footnote-label->num *emit-opts*)]
+    (if (not= false (:renumber-footnotes *emit-opts*))
+      (let [num (or (get @label->num label)
+                    (let [n (swap! (:footnote-counter *emit-opts*) inc)]
+                      (swap! label->num assoc label n)
+                      n))]
+        (str "[^" num "]"))
+      (do (swap! label->num assoc label label)
+          (str "[^" label "]")))
+    (str "[^" label "]")))
+
+(defn- emit-inline-link [node]
+  (let [text (emit-inline-str (:content node))
+        href (get-in node [:attrs :href])
+        link-format (:link-format *emit-opts*)
+        link-forms (:link-forms *emit-opts*)
+        link-form (when link-forms (get link-forms [text href]))]
+    (case link-format
+      "never-inline" (emit-link-never-inline node text href link-form)
+      "keep" (emit-link-keep node text href link-form)
+      "inline" (emit-link-inline node text href link-form)
+      "reference" (emit-link-never-inline node text href link-form)
+      (str "[" text "](" href ")"))))
+
+(defn- emit-inline-image [node]
+  (if (and *emit-opts* (contains? #{"reference" "never-inline"} (:link-format *emit-opts*)))
+    (let [{:keys [url->ref counter refs]} *emit-opts*
+          src (get-in node [:attrs :src])
+          alt (emit-inline-str (:content node))
+          dedup-key [src nil]
+          ref-num (or (get @url->ref dedup-key)
+                      (let [n (swap! counter inc)]
+                        (swap! url->ref assoc dedup-key n)
+                        (swap! refs assoc n {:url src})
+                        n))]
+      (str "![" alt "][" ref-num "]"))
+    (str "![" (emit-inline-str (:content node)) "]("
+         (get-in node [:attrs :src]) ")")))
+
 (defn- emit-inline [node]
   (case (:type node)
     :text (:text node)
@@ -1112,45 +1199,11 @@
     :strong (str "**" (emit-inline-str (:content node)) "**")
     :em (str "_" (emit-inline-str (:content node)) "_")
     :strikethrough (str "~~" (emit-inline-str (:content node)) "~~")
-    :footnote-ref (let [label (:label node)]
-                    (if-let [label->num (:footnote-label->num *emit-opts*)]
-                      (if (not= false (:renumber-footnotes *emit-opts*))
-                        (let [num (or (get @label->num label)
-                                      (let [n (swap! (:footnote-counter *emit-opts*) inc)]
-                                        (swap! label->num assoc label n)
-                                        n))]
-                          (str "[^" num "]"))
-                        (do (swap! label->num assoc label label)
-                            (str "[^" label "]")))
-                      (str "[^" label "]")))
-    :link (let [text (emit-inline-str (:content node))
-                href (get-in node [:attrs :href])
-                link-format (:link-format *emit-opts*)
-                link-forms (:link-forms *emit-opts*)
-                link-form (when link-forms (get link-forms [text href]))]
-            (case link-format
-              "never-inline" (emit-link-never-inline node text href link-form)
-              "keep" (emit-link-keep node text href link-form)
-              "inline" (emit-link-inline node text href link-form)
-              "reference" (emit-link-never-inline node text href link-form)
-              ;; default
-              (str "[" text "](" href ")")))
-    :image (if (and *emit-opts* (contains? #{"reference" "never-inline"} (:link-format *emit-opts*)))
-             (let [{:keys [url->ref counter refs]} *emit-opts*
-                   src (get-in node [:attrs :src])
-                   alt (emit-inline-str (:content node))
-                   dedup-key [src nil]
-                   ref-num (or (get @url->ref dedup-key)
-                               (let [n (swap! counter inc)]
-                                 (swap! url->ref assoc dedup-key n)
-                                 (swap! refs assoc n {:url src})
-                                 n))]
-               (str "![" alt "][" ref-num "]"))
-             (str "![" (emit-inline-str (:content node)) "]("
-                  (get-in node [:attrs :src]) ")"))
+    :footnote-ref (emit-footnote-ref (:label node))
+    :link (emit-inline-link node)
+    :image (emit-inline-image node)
     :monospace (str "`" (emit-inline-str (:content node)) "`")
     :formula (str "$" (emit-inline-str (:content node)) "$")
-    ;; fallback — try content or text
     (if-let [content (:content node)]
       (emit-inline-str content)
       (or (:text node) ""))))
@@ -1372,102 +1425,131 @@
                                                      :title-quote (first quote)))))
                  (sorted-map)))))
 
+(defn- make-emit-context [raw-md opts footnotes]
+  (let [ref-defs (when raw-md (extract-ref-links raw-md))
+        link-forms (when raw-md (detect-link-forms raw-md ref-defs))
+        link-format (or (:link-format opts) "never-inline")
+        link-placement (or (:link-placement opts) "section")
+        renumber-footnotes (get opts :renumber-footnotes true)
+        footnotes-by-label (when footnotes
+                             (into {} (map (juxt :label identity)) footnotes))
+        footnote-label->num (atom {})
+        footnote-counter (atom 0)
+        needs-refs? (contains? #{"reference" "never-inline" "keep"} link-format)]
+    {:ref-defs ref-defs
+     :link-forms link-forms
+     :link-format link-format
+     :link-placement link-placement
+     :renumber-footnotes renumber-footnotes
+     :footnotes-by-label footnotes-by-label
+     :footnote-label->num footnote-label->num
+     :footnote-counter footnote-counter
+     :needs-refs? needs-refs?}))
+
+(defn- emit-markdown-section-placement
+  [groups group-sep {:keys [link-format link-forms footnote-label->num
+                             footnote-counter renumber-footnotes
+                             footnotes-by-label]}]
+  (let [counter (atom 0)
+        url->ref (atom {})
+        refs-for-fns (atom (sorted-map-by ref-key-comparator))
+        main-output
+        (string/join group-sep
+                     (mapv (fn [group]
+                             (let [section-groups (group-nodes-by-section (vec group))]
+                               (string/join "\n\n"
+                                            (mapv (fn [sg]
+                                                    (let [refs (atom (sorted-map-by ref-key-comparator))]
+                                                      (binding [*emit-opts* {:link-format link-format
+                                                                             :link-forms link-forms
+                                                                             :refs refs
+                                                                             :counter counter
+                                                                             :url->ref url->ref
+                                                                             :footnote-label->num footnote-label->num
+                                                                             :footnote-counter footnote-counter
+                                                                             :renumber-footnotes renumber-footnotes}]
+                                                        (let [body (string/join "\n\n" (map emit-node sg))
+                                                              defs (format-ref-definitions @refs)]
+                                                          (if (seq defs)
+                                                            (str body "\n\n" defs)
+                                                            body)))))
+                                                  section-groups))))
+                           groups))]
+    (binding [*emit-opts* {:link-format link-format
+                           :link-forms link-forms
+                           :refs refs-for-fns
+                           :counter counter
+                           :url->ref url->ref
+                           :footnote-label->num footnote-label->num
+                           :footnote-counter footnote-counter
+                           :renumber-footnotes renumber-footnotes}]
+      (let [fn-defs (when footnotes-by-label
+                      (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))
+            ref-defs-from-fns (format-ref-definitions @refs-for-fns)
+            suffix (string/join "\n" (remove nil? [ref-defs-from-fns fn-defs]))]
+        (if (seq suffix)
+          (str main-output "\n\n" suffix)
+          main-output)))))
+
+(defn- emit-markdown-doc-placement
+  [groups group-sep {:keys [link-format link-forms footnote-label->num
+                             footnote-counter renumber-footnotes
+                             footnotes-by-label]}]
+  (let [counter (atom 0)
+        url->ref (atom {})
+        refs (atom (sorted-map-by ref-key-comparator))]
+    (binding [*emit-opts* {:link-format link-format
+                           :link-forms link-forms
+                           :refs refs
+                           :counter counter
+                           :url->ref url->ref
+                           :footnote-label->num footnote-label->num
+                           :footnote-counter footnote-counter
+                           :renumber-footnotes renumber-footnotes}]
+      (let [body (string/join group-sep
+                              (mapv (fn [group]
+                                      (string/join "\n\n" (map emit-node group)))
+                                    groups))
+            fn-defs (when footnotes-by-label
+                      (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))
+            ref-defs (format-ref-definitions @refs)
+            defs-sep (if (> (count groups) 1) group-sep "\n\n")
+            suffix (string/join "\n" (remove nil? [ref-defs fn-defs]))]
+        (if (seq suffix) (str body defs-sep suffix) body)))))
+
+(defn- emit-markdown-inline-format
+  [groups group-sep {:keys [link-format link-forms footnote-label->num
+                             footnote-counter renumber-footnotes
+                             footnotes-by-label]}]
+  (binding [*emit-opts* {:link-format link-format
+                         :link-forms link-forms
+                         :footnote-label->num footnote-label->num
+                         :footnote-counter footnote-counter
+                         :renumber-footnotes renumber-footnotes}]
+    (let [main-output (string/join group-sep
+                                   (mapv (fn [group]
+                                           (string/join "\n\n" (map emit-node group)))
+                                         groups))
+          fn-defs (when footnotes-by-label
+                    (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))]
+      (if (seq fn-defs)
+        (str main-output "\n\n" fn-defs)
+        main-output))))
+
 (defn- emit-markdown
   ([nodes] (emit-markdown nodes nil))
   ([nodes opts]
    (let [raw-md (:raw-md opts)
-         ref-defs (when raw-md (extract-ref-links raw-md))
-         link-forms (when raw-md (detect-link-forms raw-md ref-defs))
-         link-format (or (:link-format opts) "never-inline")
-         link-placement (or (:link-placement opts) "section")
-         renumber-footnotes (get opts :renumber-footnotes true)
-         groups (separate-results nodes)
-         group-sep (if (:no-br opts) "\n\n" "\n\n   -----\n\n")
          footnotes (when-let [fns (:footnotes (:ast opts))]
                      (when (seq fns) fns))
-         footnotes-by-label (when footnotes
-                              (into {} (map (juxt :label identity)) footnotes))
-         footnote-label->num (atom {})
-         footnote-counter (atom 0)
-         needs-refs? (contains? #{"reference" "never-inline" "keep"} link-format)]
-     (if needs-refs?
-       (let [counter (atom 0)
-             url->ref (atom {})]
-         (if (= "section" link-placement)
-           ;; Section placement
-           (let [refs-for-fns (atom (sorted-map-by ref-key-comparator))
-                 main-output
-                 (string/join group-sep
-                           (mapv (fn [group]
-                                   (let [section-groups (group-nodes-by-section (vec group))]
-                                     (string/join "\n\n"
-                                               (mapv (fn [sg]
-                                                       (let [refs (atom (sorted-map-by ref-key-comparator))]
-                                                         (binding [*emit-opts* {:link-format link-format
-                                                                                :link-forms link-forms
-                                                                                :refs refs
-                                                                                :counter counter
-                                                                                :url->ref url->ref
-                                                                                :footnote-label->num footnote-label->num
-                                                                                :footnote-counter footnote-counter
-                                                                                :renumber-footnotes renumber-footnotes}]
-                                                           (let [body (string/join "\n\n" (map emit-node sg))
-                                                                 defs (format-ref-definitions @refs)]
-                                                             (if (seq defs)
-                                                               (str body "\n\n" defs)
-                                                               body)))))
-                                                     section-groups))))
-                                 groups))]
-             (binding [*emit-opts* {:link-format link-format
-                                    :link-forms link-forms
-                                    :refs refs-for-fns
-                                    :counter counter
-                                    :url->ref url->ref
-                                    :footnote-label->num footnote-label->num
-                                    :footnote-counter footnote-counter
-                                    :renumber-footnotes renumber-footnotes}]
-               (let [fn-defs (when footnotes-by-label
-                               (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))
-                     ref-defs-from-fns (format-ref-definitions @refs-for-fns)
-                     suffix (string/join "\n" (remove nil? [ref-defs-from-fns fn-defs]))]
-                 (if (seq suffix)
-                   (str main-output "\n\n" suffix)
-                   main-output))))
-           ;; Doc placement
-           (let [refs (atom (sorted-map-by ref-key-comparator))]
-             (binding [*emit-opts* {:link-format link-format
-                                    :link-forms link-forms
-                                    :refs refs
-                                    :counter counter
-                                    :url->ref url->ref
-                                    :footnote-label->num footnote-label->num
-                                    :footnote-counter footnote-counter
-                                    :renumber-footnotes renumber-footnotes}]
-               (let [body (string/join group-sep
-                                    (mapv (fn [group]
-                                            (string/join "\n\n" (map emit-node group)))
-                                          groups))
-                     fn-defs (when footnotes-by-label
-                               (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))
-                     ref-defs (format-ref-definitions @refs)
-                     defs-sep (if (> (count groups) 1) group-sep "\n\n")
-                     suffix (string/join "\n" (remove nil? [ref-defs fn-defs]))]
-                 (if (seq suffix) (str body defs-sep suffix) body))))))
-       ;; Inline format
-       (binding [*emit-opts* {:link-format link-format
-                              :link-forms link-forms
-                              :footnote-label->num footnote-label->num
-                              :footnote-counter footnote-counter
-                              :renumber-footnotes renumber-footnotes}]
-         (let [main-output (string/join group-sep
-                                     (mapv (fn [group]
-                                             (string/join "\n\n" (map emit-node group)))
-                                           groups))
-               fn-defs (when footnotes-by-label
-                         (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))]
-           (if (seq fn-defs)
-             (str main-output "\n\n" fn-defs)
-             main-output)))))))
+         context (make-emit-context raw-md opts footnotes)
+         groups (separate-results nodes)
+         group-sep (if (:no-br opts) "\n\n" "\n\n   -----\n\n")]
+     (if (:needs-refs? context)
+       (if (= "section" (:link-placement context))
+         (emit-markdown-section-placement groups group-sep context)
+         (emit-markdown-doc-placement groups group-sep context))
+       (emit-markdown-inline-format groups group-sep context)))))
 
 (defn- emit-inline-str [content]
   (apply str (map emit-inline content)))
@@ -1648,8 +1730,6 @@
           [[]]
           nodes))
 
-
-
 (defn- build-json-footnotes [footnote-label->num-atom footnotes-by-label]
   (let [entries (loop [emitted-labels #{}
                        entries []]
@@ -1672,78 +1752,94 @@
     (when (seq entries)
       (into (sorted-map) entries))))
 
+(defn- format-plain-output [nodes use-double-newline?]
+  (let [texts (mapcat node->plain-texts nodes)
+        sep (if use-double-newline? "\n\n" "\n")]
+    (string/join sep texts)))
+
+(defn- make-structured-output-context [raw-md footnotes]
+  (let [ref-links (when raw-md (extract-ref-links raw-md))
+        link-forms (when raw-md (detect-link-forms raw-md ref-links))
+        footnotes-by-label (when footnotes
+                             (into {} (map (juxt :label identity)) footnotes))]
+    {:counter (atom 0)
+     :url->ref (atom (if ref-links
+                       (reduce-kv (fn [m ref {:keys [url]}]
+                                    (assoc m url ref))
+                                  {} ref-links)
+                       {}))
+     :refs (atom (sorted-map-by ref-key-comparator))
+     :footnote-label->num (atom {})
+     :footnote-counter (atom 0)
+     :footnotes-by-label footnotes-by-label
+     :link-forms link-forms
+     :ref-links ref-links}))
+
+(defn- format-structured-output [nodes opts output-kw]
+  (let [clean-nodes (vec (remove #(= :result-separator (:type %)) nodes))
+        has-selector? (some? (:selector opts))
+        raw-md (:raw-md opts)
+        footnotes (when-let [fns (:footnotes (:ast opts))]
+                    (when (seq fns) fns))
+        {:keys [counter url->ref refs footnote-label->num footnote-counter
+                footnotes-by-label link-forms ref-links]}
+        (make-structured-output-context raw-md footnotes)
+        json? (= :json output-kw)
+        make-opts (fn [] {:link-format "never-inline"
+                          :link-forms link-forms
+                          :counter counter
+                          :url->ref url->ref
+                          :refs refs
+                          :footnote-label->num footnote-label->num
+                          :footnote-counter footnote-counter
+                          :renumber-footnotes true})
+        items (if (and json? has-selector?)
+                (let [groups (split-by-separator nodes)]
+                  (binding [*emit-opts* (make-opts)]
+                    (vec (mapcat #(nodes->items (wrap-list-items %)) groups))))
+                (binding [*emit-opts* (when json? (make-opts))]
+                  (nodes->items (wrap-list-items clean-nodes))))
+        json-footnotes (when (and json? footnotes-by-label (seq @footnote-label->num))
+                         (binding [*emit-opts* (make-opts)]
+                           (build-json-footnotes footnote-label->num footnotes-by-label)))
+        json-links (when (and json? (seq @refs))
+                     (into (sorted-map-by ref-key-comparator)
+                           (map (fn [[ref-key {:keys [url title]}]]
+                                  [(str ref-key)
+                                   (cond-> {:url url}
+                                     title (assoc :title title))]))
+                           @refs))
+        items (if json?
+                (walk/postwalk
+                 (fn [x]
+                   (if (and (map? x) (:code-block x))
+                     (update-in x [:code-block :code] string/trimr)
+                     x))
+                 items)
+                items)
+        json-data (when json? (items->json-data items))
+        json-items (if (and json? (not has-selector?))
+                     [{:document json-data}]
+                     json-data)]
+    (case output-kw
+      :json (json/generate-string
+             (cond-> {:items json-items}
+               json-footnotes (assoc :footnotes json-footnotes)
+               json-links (assoc :links json-links)
+               (and (seq ref-links) (not has-selector?) (not json-links))
+               (assoc :links ref-links))
+             {:pretty true})
+      :edn (let [result (cond-> {:items items}
+                          footnotes (assoc :footnotes footnotes))]
+             (with-out-str (pp/pprint result))))))
+
 (defn- format-output [nodes opts]
   (let [output-kw (keyword (or (:output opts) "markdown"))
         output-kw (if (= :md output-kw) :markdown output-kw)]
     (case output-kw
       :markdown (emit-markdown nodes opts)
-      :plain (let [texts (mapcat node->plain-texts nodes)
-                   sep (if (:br opts) "\n\n" "\n")]
-               (string/join sep texts))
-      (let [clean-nodes (vec (remove #(= :result-separator (:type %)) nodes))
-            has-selector? (some? (:selector opts))
-            raw-md (:raw-md opts)
-            ref-links (when raw-md (extract-ref-links raw-md))
-            link-forms (when raw-md (detect-link-forms raw-md ref-links))
-            json? (= :json output-kw)
-            counter (atom 0)
-            url->ref (atom (if ref-links
-                             (reduce-kv (fn [m ref {:keys [url]}]
-                                          (assoc m url ref))
-                                        {} ref-links)
-                             {}))
-            refs (atom (sorted-map-by ref-key-comparator))
-            footnote-label->num (atom {})
-            footnote-counter (atom 0)
-            footnotes (when-let [fns (:footnotes (:ast opts))]
-                        (when (seq fns) fns))
-            footnotes-by-label (when footnotes
-                                 (into {} (map (juxt :label identity)) footnotes))
-            make-opts (fn [] {:link-format "never-inline"
-                              :link-forms link-forms
-                              :counter counter :url->ref url->ref :refs refs
-                              :footnote-label->num footnote-label->num
-                              :footnote-counter footnote-counter
-                              :renumber-footnotes true})
-            items (if (and json? has-selector?)
-                    (let [groups (split-by-separator nodes)]
-                      (binding [*emit-opts* (make-opts)]
-                        (vec (mapcat #(nodes->items (wrap-list-items %)) groups))))
-                    (binding [*emit-opts* (when json? (make-opts))]
-                      (nodes->items (wrap-list-items clean-nodes))))
-            json-footnotes (when (and json? footnotes-by-label (seq @footnote-label->num))
-                             (binding [*emit-opts* (make-opts)]
-                               (build-json-footnotes footnote-label->num footnotes-by-label)))
-            json-links (when (and json? (seq @refs))
-                         (into (sorted-map-by ref-key-comparator)
-                               (map (fn [[ref-key {:keys [url title]}]]
-                                      [(str ref-key)
-                                       (cond-> {:url url}
-                                         title (assoc :title title))]))
-                               @refs))
-            items (if json?
-                    (walk/postwalk
-                     (fn [x]
-                       (if (and (map? x) (:code-block x))
-                         (update-in x [:code-block :code] string/trimr)
-                         x))
-                     items)
-                    items)
-            json-data (when json? (items->json-data items))
-            json-items (if (and json? (not has-selector?))
-                         [{:document json-data}]
-                         json-data)]
-        (case output-kw
-          :json (json/generate-string
-                 (cond-> {:items json-items}
-                   json-footnotes (assoc :footnotes json-footnotes)
-                   json-links (assoc :links json-links)
-                   (and (seq ref-links) (not has-selector?) (not json-links))
-                   (assoc :links ref-links))
-                 {:pretty true})
-          :edn (let [result (cond-> {:items items}
-                              footnotes (assoc :footnotes footnotes))]
-                 (with-out-str (pp/pprint result))))))))
+      :plain (format-plain-output nodes (:br opts))
+      (format-structured-output nodes opts output-kw))))
 
 (defn- pre-process-front-matter [input]
   (let [lines (string/split-lines input)]
@@ -1839,6 +1935,21 @@
   [text width]
   (string/join "\n" (map #(wrap-line % width) (string/split text #"\n" -1))))
 
+(defn- parse-equals-flag-args
+  "Parse --flag=value syntax, returns updated opts or nil"
+  [arg opts]
+  (when-let [eq-idx (string/index-of arg "=")]
+    (let [flag (subs arg 0 eq-idx)
+          value (subs arg (inc eq-idx))]
+      (case flag
+        "--output" (assoc opts :output value)
+        "--link-format" (assoc opts :link-format value)
+        ("--link-placement" "--link-pos") (assoc opts :link-placement value)
+        "--renumber-footnotes" (assoc opts :renumber-footnotes (not= value "false"))
+        "--wrap-width" (assoc opts :wrap-width (parse-long value))
+        "--cwd" (assoc opts :cwd value)
+        nil))))
+
 (defn- parse-args [args]
   (loop [remaining (seq args)
          opts {}
@@ -1891,19 +2002,8 @@
           (recur (nnext remaining) (assoc opts :cwd (second remaining)) selector files)
 
           (string/starts-with? arg "--")
-          (if-let [eq-idx (string/index-of arg "=")]
-            (let [flag (subs arg 0 eq-idx)
-                  value (subs arg (inc eq-idx))]
-              (recur (next remaining)
-                     (case flag
-                       "--output" (assoc opts :output value)
-                       "--link-format" (assoc opts :link-format value)
-                       ("--link-placement" "--link-pos") (assoc opts :link-placement value)
-                       "--renumber-footnotes" (assoc opts :renumber-footnotes (not= value "false"))
-                       "--wrap-width" (assoc opts :wrap-width (parse-long value))
-                       "--cwd" (assoc opts :cwd value)
-                       opts)
-                     selector files))
+          (if-let [new-opts (parse-equals-flag-args arg opts)]
+            (recur (next remaining) new-opts selector files)
             (recur (next remaining) opts selector files))
 
           ;; Compound short options: -oFORMAT
@@ -1923,7 +2023,6 @@
           (if selector
             (recur (next remaining) opts selector (conj files arg))
             (recur (next remaining) opts arg files)))))))
-
 
 (defn- process
   "Processes markdown input with given args. Returns a map with:
