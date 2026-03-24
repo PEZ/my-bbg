@@ -6,10 +6,6 @@
             [clojure.walk :as walk]
             [nextjournal.markdown :as md]))
 
-(def ^:private ^:dynamic *selector-input* nil)
-
-(def ^:private ^:dynamic *selector-offset* 0)
-
 (defn- format-pest-error [{:keys [col end-col message input pointer-style]}]
   (let [col (or col 1)
         input (or input "")
@@ -34,14 +30,15 @@
          "  |\n"
          "  = " message)))
 
-(defn- throw-parse-error [col message & {:keys [end-col pointer-style]}]
-  (let [absolute-col (+ *selector-offset* col)
-        absolute-end-col (when end-col (+ *selector-offset* end-col))]
+(defn- throw-parse-error [ctx col message & {:keys [end-col pointer-style]}]
+  (let [offset (get ctx :parse/offset 0)
+        absolute-col (+ offset col)
+        absolute-end-col (when end-col (+ offset end-col))]
     (throw (ex-info message
                     (cond-> {:type :parse-error
                              :col absolute-col
                              :message message
-                             :input *selector-input*}
+                             :input (:parse/input ctx)}
                       absolute-end-col (assoc :end-col absolute-end-col)
                       pointer-style (assoc :pointer-style pointer-style))))))
 
@@ -90,9 +87,9 @@
                    segments in-regex in-quote c)))))))
 
 (defn- process-escape-sequences
-  ([s]
-   (process-escape-sequences s 1))
-  ([s start-col]
+  ([ctx s]
+   (process-escape-sequences ctx s 1))
+  ([ctx s start-col]
    (let [valid-escape-message "expected \", ', `, \\, n, r, or t"
          hex-end-col (fn [hex-start-col hex]
                        (+ hex-start-col (max 0 (- (count hex) 2))))
@@ -102,7 +99,7 @@
                  open-brace (nth s open-brace-idx nil)
                  escaped-col (+ start-col (inc idx))]
              (when (not= open-brace \{)
-               (throw-parse-error escaped-col valid-escape-message))
+               (throw-parse-error ctx escaped-col valid-escape-message))
              (let [hex-start-idx (+ idx 3)
                    hex-start-col (+ start-col hex-start-idx)]
                (loop [scan-idx hex-start-idx
@@ -110,17 +107,18 @@
                  (let [current (nth s scan-idx nil)]
                    (cond
                      (nil? current)
-                     (throw-parse-error escaped-col valid-escape-message)
+                     (throw-parse-error ctx escaped-col valid-escape-message)
 
                      (= current \})
                      (if (empty? hex-chars)
-                       (throw-parse-error hex-start-col "expected 1 - 6 hex characters")
+                       (throw-parse-error ctx hex-start-col "expected 1 - 6 hex characters")
                        (let [hex (apply str hex-chars)]
                          (if (> (count hex) 6)
-                           (throw-parse-error escaped-col valid-escape-message)
+                           (throw-parse-error ctx escaped-col valid-escape-message)
                            (let [code-point (Integer/parseInt hex 16)]
                              (when-not (Character/isValidCodePoint code-point)
-                               (throw-parse-error hex-start-col
+                               (throw-parse-error ctx
+                                                  hex-start-col
                                                   (str "invalid unicode sequence: " hex)
                                                   :end-col (hex-end-col hex-start-col hex)))
                              {:next-idx (inc scan-idx)
@@ -130,7 +128,8 @@
                      (recur (inc scan-idx) (conj hex-chars current))
 
                      :else
-                     (throw-parse-error (if (empty? hex-chars)
+                     (throw-parse-error ctx
+                                        (if (empty? hex-chars)
                                           hex-start-col
                                           (+ start-col scan-idx))
                                         "expected 1 - 6 hex characters")))))))]
@@ -145,7 +144,7 @@
                    escaped (nth s next-idx nil)
                    escaped-col (+ start-col next-idx)]
                (case escaped
-                 nil (throw-parse-error escaped-col valid-escape-message)
+                 nil (throw-parse-error ctx escaped-col valid-escape-message)
                  \" (recur (+ idx 2) (conj pieces "\""))
                  \' (recur (+ idx 2) (conj pieces "'"))
                  \` (recur (+ idx 2) (conj pieces "`"))
@@ -156,9 +155,9 @@
                  \u (let [unicode-result (parse-unicode-escape idx)]
                       (recur (:next-idx unicode-result)
                              (conj pieces (:piece unicode-result))))
-                 (throw-parse-error escaped-col valid-escape-message))))))))))
+                 (throw-parse-error ctx escaped-col valid-escape-message))))))))))
 
-(defn- validate-matcher-syntax! [matcher start-col]
+(defn- validate-matcher-syntax! [ctx matcher start-col]
   (let [anchored-start (string/starts-with? matcher "^")
         anchored-end (string/ends-with? matcher "$")
         without-start (if anchored-start (subs matcher 1) matcher)
@@ -172,12 +171,14 @@
            (or (= \" candidate-first)
                (= \' candidate-first))
            (not= (last candidate) candidate-first))
-      (throw-parse-error (+ candidate-col (count candidate))
+       (throw-parse-error ctx
+              (+ candidate-col (count candidate))
                          "expected character in quoted string")
 
       (and (string/starts-with? candidate "/")
            (not (string/ends-with? candidate "/")))
-      (throw-parse-error (+ candidate-col (count candidate))
+       (throw-parse-error ctx
+              (+ candidate-col (count candidate))
                          "expected regex character"))))
 
 (defn- regex-parse-error-message [pattern description]
@@ -185,15 +186,16 @@
     "regex parse error: Unicode escape not closed"
     (str "regex parse error: " description)))
 
-(defn- compile-matcher-regex [pattern pattern-col]
+(defn- compile-matcher-regex [ctx pattern pattern-col]
   (try
     (re-pattern pattern)
     (catch java.util.regex.PatternSyntaxException e
-      (throw-parse-error pattern-col
+      (throw-parse-error ctx
+                         pattern-col
                          (regex-parse-error-message pattern (.getDescription e))
                          :pointer-style :point))))
 
-(defn- parse-regex-replace-matcher [s start-col]
+(defn- parse-regex-replace-matcher [ctx s start-col]
   (let [rest-s (subs s 3)
         sep-idx (string/index-of rest-s "/")
         pattern-str (subs rest-s 0 sep-idx)
@@ -201,13 +203,14 @@
         replacement (if (string/ends-with? after-sep "/")
                       (subs after-sep 0 (dec (count after-sep)))
                       after-sep)
-        pattern (compile-matcher-regex pattern-str (+ start-col 3))]
+        pattern (compile-matcher-regex ctx pattern-str (+ start-col 3))]
     {:match-fn (fn [text] (re-find pattern text))
      :replace {:pattern pattern
                :replacement replacement}}))
 
-(defn- parse-regex-matcher [s start-col]
-  (let [pattern (compile-matcher-regex (subs s 1 (dec (count s)))
+(defn- parse-regex-matcher [ctx s start-col]
+  (let [pattern (compile-matcher-regex ctx
+                                       (subs s 1 (dec (count s)))
                                        (inc start-col))]
     (fn [text] (some? (re-find pattern text)))))
 
@@ -237,17 +240,17 @@
       :else (fn [text] (string/includes? (string/lower-case text) text-lower)))))
 
 (defn- parse-text-matcher
-  ([s]
-   (parse-text-matcher s 1))
-  ([s start-col]
+  ([ctx s]
+   (parse-text-matcher ctx s 1))
+  ([ctx s start-col]
    (when (and s (not= s "") (not= s "*"))
-     (validate-matcher-syntax! s start-col)
+     (validate-matcher-syntax! ctx s start-col)
      (cond
        (string/starts-with? s "!s/")
-       (parse-regex-replace-matcher s start-col)
+       (parse-regex-replace-matcher ctx s start-col)
 
        (and (string/starts-with? s "/") (string/ends-with? s "/"))
-       (parse-regex-matcher s start-col)
+       (parse-regex-matcher ctx s start-col)
 
        :else
        (let [{:keys [anchored-start anchored-end text]} (strip-anchor-markers s)
@@ -259,11 +262,13 @@
              quoted? (some? quote-char)
              inner-start-col (+ start-col (if anchored-start 1 0) 1)
              inner (if quoted?
-                     (process-escape-sequences (subs text 1 (dec (count text)))
+                     (process-escape-sequences ctx
+                                               (subs text 1 (dec (count text)))
                                                inner-start-col)
                      text)]
          (when (and (not quoted?) (string/starts-with? inner "<"))
-           (throw-parse-error start-col
+           (throw-parse-error ctx
+                              start-col
                               "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
          (if quoted?
            (build-quoted-matcher inner anchored-start anchored-end)
@@ -279,7 +284,7 @@
         left-trim (- (count raw-tail) (count (string/triml raw-tail)))]
     (+ prefix-len left-trim 1)))
 
-(defn- parse-front-matter-selector [s]
+(defn- parse-front-matter-selector [ctx s]
   (let [rest-s (subs s 3)
         next-char (first rest-s)]
     (if (or (nil? next-char)
@@ -288,7 +293,7 @@
             text (string/trim rest-s)]
         {:type :front-matter
          :format nil
-         :matcher (parse-text-matcher text text-col)})
+     :matcher (parse-text-matcher ctx text text-col)})
       (let [token-end (or (string/index-of rest-s " ")
                           (count rest-s))
             fmt-str (subs rest-s 0 token-end)
@@ -303,26 +308,28 @@
         (if format
           {:type :front-matter
            :format format
-           :matcher (parse-text-matcher text text-col)}
-          (throw-parse-error 4
+           :matcher (parse-text-matcher ctx text text-col)}
+          (throw-parse-error ctx
+                             4
                              (str "front matter language must be \"toml\" or \"yaml\". Found \"" fmt-str "\".")
                              :end-col (+ 3 (count fmt-str))
                              :pointer-style :tight-range))))))
 
-(defn- parse-table-selector [s]
+(defn- parse-table-selector [ctx s]
   (let [parts (string/split s #":-:" -1)
         [col-text row-text] (mapv string/trim (rest parts))
         second-delim-col (some-> (string/index-of s ":-:" 3) inc)]
     (when (and second-delim-col
                (string/blank? col-text))
-      (throw-parse-error second-delim-col
+      (throw-parse-error ctx
+                         second-delim-col
                          "table column matcher cannot empty; use an explicit \"*\""
                          :pointer-style :point))
     {:type :table
-     :col-matcher (parse-text-matcher col-text)
-     :row-matcher (parse-text-matcher row-text)}))
+     :col-matcher (parse-text-matcher ctx col-text)
+     :row-matcher (parse-text-matcher ctx row-text)}))
 
-(defn- parse-section-selector [s]
+(defn- parse-section-selector [ctx s]
   (let [range-match (re-find #"^#\{(\d*)(,?)(\d*)\}(.*)" s)]
     (if range-match
       (let [[_ lo-str comma hi-str rest-text] range-match
@@ -338,25 +345,27 @@
             text (string/trim rest-text)]
         {:type :section
          :level-range level-range
-         :matcher (parse-text-matcher text text-col)})
+         :matcher (parse-text-matcher ctx text text-col)})
       (let [hashes (re-find #"^#+" s)
             level (count hashes)
             next-char (nth s level nil)]
         (when (and next-char
                    (not (Character/isWhitespace ^char next-char))
                    (not= next-char \{))
-          (throw-parse-error (inc level)
+          (throw-parse-error ctx
+                             (inc level)
                              "expected end of input, space, or section options"))
         (let [text-col (matcher-start-col level s)
               text (string/trim (subs s level))]
           (when (string/starts-with? text "$")
-            (throw-parse-error text-col
+            (throw-parse-error ctx
+                               text-col
                                "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
           {:type :section
            :level (when (> level 1) level)
-           :matcher (parse-text-matcher text text-col)})))))
+           :matcher (parse-text-matcher ctx text text-col)})))))
 
-(defn- parse-task-item-selector [s]
+(defn- parse-task-item-selector [ctx s]
   (let [marker-end (string/index-of s "]")
         marker (when marker-end (subs s 2 (inc marker-end)))]
     (if (contains? #{"[x]" "[ ]" "[?]"} marker)
@@ -368,10 +377,10 @@
                         "[?]" :any)]
         {:type :task
          :task-kind task-kind
-         :matcher (parse-text-matcher text text-col)})
-      (throw-parse-error 4 "expected \"[x]\", \"[x]\", or \"[?]\""))))
+                     :matcher (parse-text-matcher ctx text text-col)})
+                  (throw-parse-error ctx 4 "expected \"[x]\", \"[x]\", or \"[?]\""))))
 
-(defn- parse-ordered-list-selector [s]
+                (defn- parse-ordered-list-selector [ctx s]
   (let [text-col (matcher-start-col 2 s)
         text (string/trim (subs s 2))
         task-match (re-find #"^\[[ x?]\]" text)]
@@ -386,12 +395,12 @@
         {:type :task
          :task-kind task-kind
          :list-kind :ordered
-         :matcher (parse-text-matcher rest-text rest-col)})
+         :matcher (parse-text-matcher ctx rest-text rest-col)})
       {:type :list-item
        :list-kind :ordered
-       :matcher (parse-text-matcher text text-col)})))
+       :matcher (parse-text-matcher ctx text text-col)})))
 
-(defn- parse-code-block-selector [s]
+(defn- parse-code-block-selector [ctx s]
   (let [rest-raw (subs s 3)
         has-space (string/starts-with? rest-raw " ")
         rest-col (matcher-start-col 3 s)
@@ -402,12 +411,12 @@
     (if (and has-space (nil? text))
       {:type :code
        :language-matcher nil
-       :matcher (parse-text-matcher lang rest-col)}
+       :matcher (parse-text-matcher ctx lang rest-col)}
       {:type :code
-       :language-matcher (parse-text-matcher lang rest-col)
-       :matcher (parse-text-matcher text text-col)})))
+       :language-matcher (parse-text-matcher ctx lang rest-col)
+       :matcher (parse-text-matcher ctx text text-col)})))
 
-(defn- parse-image-selector [s]
+(defn- parse-image-selector [ctx s]
   (let [close-bracket (string/index-of s "](")
         alt-text (when close-bracket (subs s 2 close-bracket))
         after (when close-bracket (subs s (+ 2 close-bracket)))
@@ -415,12 +424,12 @@
         url-col (when close-bracket (+ close-bracket 3))
         url-text (when end-paren (subs after 0 end-paren))]
     (when (and close-bracket after (nil? end-paren))
-      (throw-parse-error (inc (count s)) "expected \"$\""))
+      (throw-parse-error ctx (inc (count s)) "expected \"$\""))
     {:type :image
-     :matcher (parse-text-matcher (some-> alt-text string/trim) 3)
-     :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)}))
+     :matcher (parse-text-matcher ctx (some-> alt-text string/trim) 3)
+     :url-matcher (parse-text-matcher ctx (some-> url-text string/trim) url-col)}))
 
-(defn- parse-link-selector [s]
+(defn- parse-link-selector [ctx s]
   (let [close-bracket (string/index-of s "](")
         display-text (when close-bracket (subs s 1 close-bracket))
         after (when close-bracket (subs s (+ 2 close-bracket)))
@@ -428,12 +437,12 @@
         url-col (when close-bracket (+ close-bracket 3))
         url-text (when end-paren (subs after 0 end-paren))]
     (when (and close-bracket after (nil? end-paren))
-      (throw-parse-error (inc (count s)) "expected \"$\""))
+      (throw-parse-error ctx (inc (count s)) "expected \"$\""))
     {:type :link
-     :matcher (parse-text-matcher (some-> display-text string/trim) 2)
-     :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)}))
+     :matcher (parse-text-matcher ctx (some-> display-text string/trim) 2)
+     :url-matcher (parse-text-matcher ctx (some-> url-text string/trim) url-col)}))
 
-(defn- parse-selector [s]
+(defn- parse-selector [ctx s]
   (let [s (string/trim s)
         table-parts (when (string/starts-with? s ":-:")
                       (string/split s #":-:" -1))
@@ -449,23 +458,23 @@
           (and table-parts
                (< (count table-parts) 3)
                (= "*" table-col-text)))
-      (throw-parse-error 1 "expected valid query")
+         (throw-parse-error ctx 1 "expected valid query")
 
       (string/starts-with? s "#")
-      (parse-section-selector s)
+         (parse-section-selector ctx s)
 
       (string/starts-with? s "- [")
-      (parse-task-item-selector s)
+         (parse-task-item-selector ctx s)
 
       (string/starts-with? s "1.")
-      (parse-ordered-list-selector s)
+         (parse-ordered-list-selector ctx s)
 
       (string/starts-with? s "- ")
       (let [text-col (matcher-start-col 2 s)
             text (string/trim (subs s 2))]
         {:type :list-item
          :list-kind :unordered
-         :matcher (parse-text-matcher text text-col)})
+            :matcher (parse-text-matcher ctx text text-col)})
 
       (= s "-")
       {:type :list-item
@@ -476,37 +485,37 @@
       (let [text-col (matcher-start-col 1 s)
             text (string/trim (subs s 1))]
         {:type :blockquote
-         :matcher (parse-text-matcher text text-col)})
+        :matcher (parse-text-matcher ctx text text-col)})
 
       (string/starts-with? s "```")
-      (parse-code-block-selector s)
+      (parse-code-block-selector ctx s)
 
       (string/starts-with? s "![")
-      (parse-image-selector s)
+      (parse-image-selector ctx s)
 
       (string/starts-with? s "[")
-      (parse-link-selector s)
+      (parse-link-selector ctx s)
 
       (string/starts-with? s "</>")
       (let [text-col (matcher-start-col 3 s)
             text (string/trim (subs s 3))]
         {:type :html
-         :matcher (parse-text-matcher text text-col)})
+        :matcher (parse-text-matcher ctx text text-col)})
 
       (string/starts-with? s "P:")
       (let [text-col (matcher-start-col 2 s)
             text (string/trim (subs s 2))]
         {:type :paragraph
-         :matcher (parse-text-matcher text text-col)})
+        :matcher (parse-text-matcher ctx text text-col)})
 
       (string/starts-with? s "+++")
-      (parse-front-matter-selector s)
+      (parse-front-matter-selector ctx s)
 
       (string/starts-with? s ":-:")
-      (parse-table-selector s)
+      (parse-table-selector ctx s)
 
       :else
-      (throw-parse-error 1 "expected valid query"))))
+      (throw-parse-error ctx 1 "expected valid query"))))
 
 (defn- top-level-sections
   "Extract top-level sections: each heading starts a section, body extends
@@ -996,26 +1005,26 @@
                   node))))))))
 
 (defn- run-pipeline [nodes selector-str]
-  (binding [*selector-input* selector-str]
-    (let [segments (split-pipeline selector-str)
-          selectors (mapv (fn [{:keys [text offset]}]
-                            (binding [*selector-offset* (dec offset)]
-                              (try
-                                (assoc (parse-selector text) :offset offset)
-                                (catch clojure.lang.ExceptionInfo e
-                                  (let [{:keys [type col message]} (ex-data e)]
-                                    (if (and (= :parse-error type)
-                                             (> offset 1)
-                                             (= col offset)
-                                             (= message "expected valid query"))
-                                      (throw-parse-error 1 "expected end of input or selector")
-                                      (throw e)))))))
-                          segments)
-          result (reduce (fn [nodes sel]
-                           ((selector->filter-fn sel) nodes))
-                         nodes
-                         selectors)]
-      (apply-replacements result selectors))))
+  (let [parse-ctx {:parse/input selector-str}
+        segments (split-pipeline selector-str)
+        selectors (mapv (fn [{:keys [text offset]}]
+                          (let [segment-ctx (assoc parse-ctx :parse/offset (dec offset))]
+                            (try
+                              (assoc (parse-selector segment-ctx text) :offset offset)
+                              (catch clojure.lang.ExceptionInfo e
+                                (let [{:keys [type col message]} (ex-data e)]
+                                  (if (and (= :parse-error type)
+                                           (> offset 1)
+                                           (= col offset)
+                                           (= message "expected valid query"))
+                                    (throw-parse-error segment-ctx 1 "expected end of input or selector")
+                                    (throw e)))))))
+                        segments)
+        result (reduce (fn [nodes sel]
+                         ((selector->filter-fn sel) nodes))
+                       nodes
+                       selectors)]
+    (apply-replacements result selectors)))
 
 (declare emit-inline-str)
 

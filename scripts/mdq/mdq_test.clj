@@ -55,8 +55,7 @@
 (deftest throw-parse-error-test
   (testing "keeps relative columns without a segment offset"
     (let [error (try
-                  (binding [mdq/*selector-input* "# bad"]
-                    (#'mdq/throw-parse-error 3 "boom" :end-col 5))
+                  (#'mdq/throw-parse-error {:parse/input "# bad"} 3 "boom" :end-col 5)
                   (catch clojure.lang.ExceptionInfo e
                     e))]
       (is (instance? clojure.lang.ExceptionInfo error))
@@ -69,9 +68,11 @@
                           [:type :col :end-col :message :input])))))
   (testing "applies pipeline segment offsets to absolute columns"
     (let [error (try
-                  (binding [mdq/*selector-input* "# * | bad"
-                            mdq/*selector-offset* 6]
-                    (#'mdq/throw-parse-error 1 "boom" :end-col 3))
+                  (#'mdq/throw-parse-error {:parse/input "# * | bad"
+                                            :parse/offset 6}
+                                           1
+                                           "boom"
+                                           :end-col 3)
                   (catch clojure.lang.ExceptionInfo e
                     e))]
       (is (instance? clojure.lang.ExceptionInfo error))
@@ -85,56 +86,55 @@
 
 (deftest parse-text-matcher-test
   (testing "nil/empty/wildcard returns nil"
-    (is (nil? (#'mdq/parse-text-matcher nil)))
-    (is (nil? (#'mdq/parse-text-matcher "")))
-    (is (nil? (#'mdq/parse-text-matcher "*"))))
+    (is (nil? (#'mdq/parse-text-matcher {} nil)))
+    (is (nil? (#'mdq/parse-text-matcher {} "")))
+    (is (nil? (#'mdq/parse-text-matcher {} "*"))))
   (testing "unquoted case-insensitive"
-    (let [m (#'mdq/parse-text-matcher "hello")]
+    (let [m (#'mdq/parse-text-matcher {} "hello")]
       (is (m "Hello World"))
       (is (m "HELLO"))
       (is (not (m "world")))))
   (testing "quoted case-sensitive"
-    (let [m (#'mdq/parse-text-matcher "\"Hello\"")]
+    (let [m (#'mdq/parse-text-matcher {} "\"Hello\"")]
       (is (m "Hello World"))
       (is (not (m "hello world")))))
   (testing "regex"
-    (let [m (#'mdq/parse-text-matcher "/hel+o/")]
+    (let [m (#'mdq/parse-text-matcher {} "/hel+o/")]
       (is (m "hello"))
       (is (m "helllo"))
       (is (not (m "heo")))))
   (testing "anchored start"
-    (let [m (#'mdq/parse-text-matcher "^intro")]
+    (let [m (#'mdq/parse-text-matcher {} "^intro")]
       (is (m "Introduction"))
       (is (not (m "the intro")))))
   (testing "anchored end"
-    (let [m (#'mdq/parse-text-matcher "api$")]
+    (let [m (#'mdq/parse-text-matcher {} "api$")]
       (is (m "REST API"))
       (is (not (m "API docs")))))
   (testing "anchored both"
-    (let [m (#'mdq/parse-text-matcher "^hello$")]
+    (let [m (#'mdq/parse-text-matcher {} "^hello$")]
       (is (m "HELLO"))
       (is (not (m "hello world")))))
   (testing "regex replace returns map"
-    (let [m (#'mdq/parse-text-matcher "!s/foo/bar/")]
+    (let [m (#'mdq/parse-text-matcher {} "!s/foo/bar/")]
       (is (map? m))
       (is (#'mdq/text-matches? m "foo bar"))
       (is (not (#'mdq/text-matches? m "baz"))))))
 
 (deftest parse-selector-test
   (testing "section selector"
-    (is (= :section (:type (#'mdq/parse-selector "# hello"))))
-    (is (nil? (:level (#'mdq/parse-selector "# hello"))))
-    (is (= 2 (:level (#'mdq/parse-selector "## hello"))))
-    (is (= 3 (:level (#'mdq/parse-selector "###")))))
+    (is (= :section (:type (#'mdq/parse-selector {:parse/input "# hello"} "# hello"))))
+    (is (nil? (:level (#'mdq/parse-selector {:parse/input "# hello"} "# hello"))))
+    (is (= 2 (:level (#'mdq/parse-selector {:parse/input "## hello"} "## hello"))))
+    (is (= 3 (:level (#'mdq/parse-selector {:parse/input "###"} "###")))))
   (testing "section without text has nil matcher"
-    (is (nil? (:matcher (#'mdq/parse-selector "#")))))
+    (is (nil? (:matcher (#'mdq/parse-selector {:parse/input "#"} "#")))))
   (testing "single-column table selectors remain valid"
-    (is (= :table (:type (#'mdq/parse-selector ":-: Name")))))
+    (is (= :table (:type (#'mdq/parse-selector {:parse/input ":-: Name"} ":-: Name")))))
   (testing "phase 2 dispatch rejections return parse errors at col 1"
     (doseq [selector ["\"hello\"" "~" "2. hello" ":-: *" "P *" "P : *"]]
       (let [error (try
-                    (binding [mdq/*selector-input* selector]
-                      (#'mdq/parse-selector selector))
+                    (#'mdq/parse-selector {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -163,8 +163,7 @@
                :message "expected \"[x]\", \"[x]\", or \"[?]\""
                :input "- [*]"}]]]
       (let [error (try
-                    (binding [mdq/*selector-input* selector]
-                      (#'mdq/parse-selector selector))
+                    (#'mdq/parse-selector {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -195,8 +194,7 @@
                :message "expected \"$\""
                :input "[](http"}]]]
       (let [error (try
-                    (binding [mdq/*selector-input* selector]
-                      (#'mdq/parse-selector selector))
+                    (#'mdq/parse-selector {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -233,8 +231,7 @@
                :message "invalid unicode sequence: FFFFFF"
                :input "# \"\\u{FFFFFF}\""}]]]
       (let [error (try
-                    (binding [mdq/*selector-input* selector]
-                      (#'mdq/parse-selector selector))
+                    (#'mdq/parse-selector {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -266,8 +263,7 @@
                :message "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""
                :input "</> <span>"}]]]
       (let [error (try
-                    (binding [mdq/*selector-input* selector]
-                      (#'mdq/parse-selector selector))
+                    (#'mdq/parse-selector {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -289,7 +285,7 @@
 (deftest section-filter-test
   (let [nodes (:content (md/parse "# Intro\nHello\n\n## Sub\nDetail\n\n# API\nEndpoints"))]
     (testing "filter by text"
-      (let [result (#'mdq/section-filter {:level 1 :matcher (#'mdq/parse-text-matcher "intro")} nodes)]
+      (let [result (#'mdq/section-filter {:level 1 :matcher (#'mdq/parse-text-matcher {} "intro")} nodes)]
         (is (= 4 (count result)))
         (is (= :heading (:type (first result))))))
     (testing "filter all sections (no matcher)"
@@ -396,38 +392,38 @@
 
 (deftest parse-selector-elements-test
   (testing "unordered list"
-    (let [sel (#'mdq/parse-selector "- item")]
+    (let [sel (#'mdq/parse-selector {:parse/input "- item"} "- item")]
       (is (= :list-item (:type sel)))
       (is (= :unordered (:list-kind sel)))))
   (testing "ordered list"
-    (let [sel (#'mdq/parse-selector "1. item")]
+    (let [sel (#'mdq/parse-selector {:parse/input "1. item"} "1. item")]
       (is (= :list-item (:type sel)))
       (is (= :ordered (:list-kind sel)))))
   (testing "unchecked task"
-    (let [sel (#'mdq/parse-selector "- [ ] todo")]
+    (let [sel (#'mdq/parse-selector {:parse/input "- [ ] todo"} "- [ ] todo")]
       (is (= :task (:type sel)))
       (is (= :unchecked (:task-kind sel)))))
   (testing "checked task"
-    (let [sel (#'mdq/parse-selector "- [x] done")]
+    (let [sel (#'mdq/parse-selector {:parse/input "- [x] done"} "- [x] done")]
       (is (= :task (:type sel)))
       (is (= :checked (:task-kind sel)))))
   (testing "any task"
-    (is (= :any (:task-kind (#'mdq/parse-selector "- [?]")))))
+    (is (= :any (:task-kind (#'mdq/parse-selector {:parse/input "- [?]"} "- [?]")))))
   (testing "blockquote"
-    (is (= :blockquote (:type (#'mdq/parse-selector "> quote")))))
+    (is (= :blockquote (:type (#'mdq/parse-selector {:parse/input "> quote"} "> quote")))))
   (testing "code block"
-    (let [sel (#'mdq/parse-selector "```clojure")]
+    (let [sel (#'mdq/parse-selector {:parse/input "```clojure"} "```clojure")]
       (is (= :code (:type sel)))))
   (testing "link"
-    (let [sel (#'mdq/parse-selector "[text](url)")]
+    (let [sel (#'mdq/parse-selector {:parse/input "[text](url)"} "[text](url)")]
       (is (= :link (:type sel)))))
   (testing "image"
-    (let [sel (#'mdq/parse-selector "![alt](src)")]
+    (let [sel (#'mdq/parse-selector {:parse/input "![alt](src)"} "![alt](src)")]
       (is (= :image (:type sel)))))
   (testing "HTML"
-    (is (= :html (:type (#'mdq/parse-selector "</> div")))))
+    (is (= :html (:type (#'mdq/parse-selector {:parse/input "</> div"} "</> div")))))
   (testing "paragraph"
-    (is (= :paragraph (:type (#'mdq/parse-selector "P: hello"))))))
+    (is (= :paragraph (:type (#'mdq/parse-selector {:parse/input "P: hello"} "P: hello"))))))
 
 (deftest list-filter-test
   (let [nodes (:content (md/parse "- foo\n- bar\n- baz"))]
@@ -498,15 +494,15 @@
              (mapv :type (#'mdq/walk-ast nodes)))))
     (testing "shared simple-filter handles link text and url matchers"
       (let [simple-filter #'mdq/simple-filter]
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector "[](github)") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "[](github)"} "[](github)") nodes)))
             "URL matcher should narrow link matches")
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector "[Google]()") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "[Google]()"} "[Google]()") nodes)))
             "Text matcher should narrow link matches")))
     (testing "shared simple-filter handles code language and body matchers"
       (let [simple-filter #'mdq/simple-filter]
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector "```clojure") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "```clojure"} "```clojure") nodes)))
             "Language matcher should narrow code matches")
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector "``` * (+ 1 2)") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "``` * (+ 1 2)"} "``` * (+ 1 2)") nodes)))
             "Body matcher should narrow code matches")))))
 
 (deftest parse-args-test
@@ -628,39 +624,39 @@
 
 (deftest anchored-quoted-text-matcher-test
   (testing "anchored quoted start"
-    (let [m (#'mdq/parse-text-matcher "^\"Hello\"")]
+    (let [m (#'mdq/parse-text-matcher {} "^\"Hello\"")]
       (is (m "Hello World"))
       (is (not (m "Say Hello")))))
   (testing "anchored quoted end"
-    (let [m (#'mdq/parse-text-matcher "\"World\"$")]
+    (let [m (#'mdq/parse-text-matcher {} "\"World\"$")]
       (is (m "Hello World"))
       (is (not (m "World Tour")))))
   (testing "anchored quoted both"
-    (let [m (#'mdq/parse-text-matcher "^\"Hello\"$")]
+    (let [m (#'mdq/parse-text-matcher {} "^\"Hello\"$")]
       (is (m "Hello"))
       (is (not (m "Hello World"))))))
 
 (deftest escape-sequences-test
   (testing "escape sequences in quoted strings"
-    (let [m (#'mdq/parse-text-matcher "\"hello\\nworld\"")]
+    (let [m (#'mdq/parse-text-matcher {} "\"hello\\nworld\"")]
       (is (m "hello\nworld"))
       (is (not (m "hello\\nworld"))))
-    (let [m (#'mdq/parse-text-matcher "\"it\\'s\"")]
+    (let [m (#'mdq/parse-text-matcher {} "\"it\\'s\"")]
       (is (m "it's")))
-    (let [m (#'mdq/parse-text-matcher "\"back\\\\slash\"")]
+    (let [m (#'mdq/parse-text-matcher {} "\"back\\\\slash\"")]
       (is (m "back\\slash")))
-    (let [m (#'mdq/parse-text-matcher "\"snow\\u{2603}man\"")]
+    (let [m (#'mdq/parse-text-matcher {} "\"snow\\u{2603}man\"")]
       (is (m "snow☃man")))))
 
 (deftest section-level-range-test
   (testing "section level range selectors"
-    (let [{:keys [level-range]} (#'mdq/parse-selector "#{2}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{2}"} "#{2}")]
       (is (= [2 2] level-range)))
-    (let [{:keys [level-range]} (#'mdq/parse-selector "#{2,4}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{2,4}"} "#{2,4}")]
       (is (= [2 4] level-range)))
-    (let [{:keys [level-range]} (#'mdq/parse-selector "#{2,}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{2,}"} "#{2,}")]
       (is (= [2 6] level-range)))
-    (let [{:keys [level-range]} (#'mdq/parse-selector "#{,3}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{,3}"} "#{,3}")]
       (is (= [1 3] level-range))))
   (testing "section level range filtering"
     (let [nodes (:content (md/parse "# H1\nA\n## H2\nB\n### H3\nC\n#### H4\nD"))]
@@ -670,11 +666,11 @@
 
 (deftest ordered-task-selector-test
   (testing "ordered task selectors"
-    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector "1. [x] done")]
+    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector {:parse/input "1. [x] done"} "1. [x] done")]
       (is (= :task type))
       (is (= :checked task-kind))
       (is (= :ordered list-kind)))
-    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector "1. [ ]")]
+    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector {:parse/input "1. [ ]"} "1. [ ]")]
       (is (= :task type))
       (is (= :unchecked task-kind))
       (is (= :ordered list-kind)))))
