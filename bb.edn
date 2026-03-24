@@ -38,7 +38,7 @@
        :task (mdq/exec! *command-line-args*)}
 
   e2e-test {:doc "Run E2E compatibility tests against Rust mdq specs. Options: --refresh, --spec FILE, --subprocess"
-            :task (mdq-e2e-test/run!
+            :task (mdq-e2e-test/run-e2e!
                    (cli/parse-opts *command-line-args*
                                    {:coerce {:refresh :boolean
                                              :spec :string

@@ -116,7 +116,7 @@
                   (count results) " total"))
     {:pass pass :fail fail :skipped skipped :total (count results)}))
 
-(defn run!
+(defn run-e2e!
   "Run E2E tests. Options: :refresh (re-download specs), :spec (single spec file), :subprocess (use subprocess)."
   [{:keys [refresh spec] :as opts}]
   (e2e-specs/ensure-specs! :refresh? refresh)
