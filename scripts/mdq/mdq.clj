@@ -86,76 +86,80 @@
             (recur (next chars) (conj current c) current-start (inc idx)
                    segments in-regex in-quote c)))))))
 
+(defn- unicode-escape-end-col [hex-start-col hex]
+  (+ hex-start-col (max 0 (- (count hex) 2))))
+
+(defn- parse-unicode-escape-sequence [ctx s start-col idx valid-escape-message]
+  (let [open-brace-idx (+ idx 2)
+        open-brace (nth s open-brace-idx nil)
+        escaped-col (+ start-col (inc idx))]
+    (when (not= open-brace \{)
+      (throw-parse-error ctx escaped-col valid-escape-message))
+    (let [hex-start-idx (+ idx 3)
+          hex-start-col (+ start-col hex-start-idx)]
+      (loop [scan-idx hex-start-idx
+             hex-chars []]
+        (let [current (nth s scan-idx nil)]
+          (cond
+            (nil? current)
+            (throw-parse-error ctx escaped-col valid-escape-message)
+
+            (= current \})
+            (if (empty? hex-chars)
+              (throw-parse-error ctx hex-start-col "expected 1 - 6 hex characters")
+              (let [hex (apply str hex-chars)]
+                (if (> (count hex) 6)
+                  (throw-parse-error ctx escaped-col valid-escape-message)
+                  (let [code-point (Integer/parseInt hex 16)]
+                    (when-not (Character/isValidCodePoint code-point)
+                      (throw-parse-error ctx
+                                         hex-start-col
+                                         (str "invalid unicode sequence: " hex)
+                                         :end-col (unicode-escape-end-col hex-start-col hex)))
+                    {:next-idx (inc scan-idx)
+                     :piece (String. (Character/toChars code-point))}))))
+
+            (re-matches #"[0-9a-fA-F]" (str current))
+            (recur (inc scan-idx) (conj hex-chars current))
+
+            :else
+            (throw-parse-error ctx
+                               (if (empty? hex-chars)
+                                 hex-start-col
+                                 (+ start-col scan-idx))
+                               "expected 1 - 6 hex characters")))))))
+
+(defn- decode-escape-sequence [ctx s start-col idx valid-escape-message]
+  (let [next-idx (inc idx)
+        escaped (nth s next-idx nil)
+        escaped-col (+ start-col next-idx)]
+    (case escaped
+      nil (throw-parse-error ctx escaped-col valid-escape-message)
+      \" {:next-idx (+ idx 2) :piece "\""}
+      \' {:next-idx (+ idx 2) :piece "'"}
+      \` {:next-idx (+ idx 2) :piece "`"}
+      \\ {:next-idx (+ idx 2) :piece "\\"}
+      \n {:next-idx (+ idx 2) :piece "\n"}
+      \r {:next-idx (+ idx 2) :piece "\r"}
+      \t {:next-idx (+ idx 2) :piece "\t"}
+      \u (parse-unicode-escape-sequence ctx s start-col idx valid-escape-message)
+      (throw-parse-error ctx escaped-col valid-escape-message))))
+
 (defn- process-escape-sequences
   ([ctx s]
    (process-escape-sequences ctx s 1))
   ([ctx s start-col]
-   (let [valid-escape-message "expected \", ', `, \\, n, r, or t"
-         hex-end-col (fn [hex-start-col hex]
-                       (+ hex-start-col (max 0 (- (count hex) 2))))
-         parse-unicode-escape
-         (fn [idx]
-           (let [open-brace-idx (+ idx 2)
-                 open-brace (nth s open-brace-idx nil)
-                 escaped-col (+ start-col (inc idx))]
-             (when (not= open-brace \{)
-               (throw-parse-error ctx escaped-col valid-escape-message))
-             (let [hex-start-idx (+ idx 3)
-                   hex-start-col (+ start-col hex-start-idx)]
-               (loop [scan-idx hex-start-idx
-                      hex-chars []]
-                 (let [current (nth s scan-idx nil)]
-                   (cond
-                     (nil? current)
-                     (throw-parse-error ctx escaped-col valid-escape-message)
-
-                     (= current \})
-                     (if (empty? hex-chars)
-                       (throw-parse-error ctx hex-start-col "expected 1 - 6 hex characters")
-                       (let [hex (apply str hex-chars)]
-                         (if (> (count hex) 6)
-                           (throw-parse-error ctx escaped-col valid-escape-message)
-                           (let [code-point (Integer/parseInt hex 16)]
-                             (when-not (Character/isValidCodePoint code-point)
-                               (throw-parse-error ctx
-                                                  hex-start-col
-                                                  (str "invalid unicode sequence: " hex)
-                                                  :end-col (hex-end-col hex-start-col hex)))
-                             {:next-idx (inc scan-idx)
-                              :piece (String. (Character/toChars code-point))}))))
-
-                     (re-matches #"[0-9a-fA-F]" (str current))
-                     (recur (inc scan-idx) (conj hex-chars current))
-
-                     :else
-                     (throw-parse-error ctx
-                                        (if (empty? hex-chars)
-                                          hex-start-col
-                                          (+ start-col scan-idx))
-                                        "expected 1 - 6 hex characters")))))))]
+   (let [valid-escape-message "expected \", ', `, \\, n, r, or t"]
      (loop [idx 0
             pieces []]
        (if (>= idx (count s))
          (apply str pieces)
          (let [ch (nth s idx)]
-           (if (not= ch \\)
-             (recur (inc idx) (conj pieces (str ch)))
-             (let [next-idx (inc idx)
-                   escaped (nth s next-idx nil)
-                   escaped-col (+ start-col next-idx)]
-               (case escaped
-                 nil (throw-parse-error ctx escaped-col valid-escape-message)
-                 \" (recur (+ idx 2) (conj pieces "\""))
-                 \' (recur (+ idx 2) (conj pieces "'"))
-                 \` (recur (+ idx 2) (conj pieces "`"))
-                 \\ (recur (+ idx 2) (conj pieces "\\"))
-                 \n (recur (+ idx 2) (conj pieces "\n"))
-                 \r (recur (+ idx 2) (conj pieces "\r"))
-                 \t (recur (+ idx 2) (conj pieces "\t"))
-                 \u (let [unicode-result (parse-unicode-escape idx)]
-                      (recur (:next-idx unicode-result)
-                             (conj pieces (:piece unicode-result))))
-                 (throw-parse-error ctx escaped-col valid-escape-message))))))))))
+           (if (= ch \\)
+             (let [{:keys [next-idx piece]}
+                   (decode-escape-sequence ctx s start-col idx valid-escape-message)]
+               (recur next-idx (conj pieces piece)))
+             (recur (inc idx) (conj pieces (str ch))))))))))
 
 (defn- validate-matcher-syntax! [ctx matcher start-col]
   (let [anchored-start (string/starts-with? matcher "^")
@@ -579,55 +583,78 @@
                  :body (subvec nodes-vec (inc idx) end)}))))
          vec)))
 
+(defn- current-section-level [{:keys [current]}]
+  (some-> current :heading :heading-level))
+
+(defn- close-current-section [{:keys [sections current]}]
+  {:sections (cond-> sections current (conj current))
+   :current nil})
+
+(defn- start-section [state heading]
+  (assoc (close-current-section state)
+         :current {:heading heading :body []}))
+
+(defn- append-to-current-section [state node]
+  (update-in state [:current :body] conj node))
+
+(defn- finish-sections [state]
+  (:sections (close-current-section state)))
+
+(defn- range-section-step [state node lo hi]
+  (let [node-heading? (= :heading (:type node))
+        node-level (:heading-level node)
+        current-level (current-section-level state)
+        in-range? (and node-heading?
+                       (<= lo node-level hi))
+        closes-current? (and current-level
+                             node-heading?
+                             (<= node-level current-level))]
+    (cond
+      (and in-range?
+           (or (nil? current-level)
+               closes-current?))
+      (start-section state node)
+
+      (and closes-current?
+           (not in-range?))
+      (close-current-section state)
+
+      current-level
+      (append-to-current-section state node)
+
+      :else
+      state)))
+
+(defn- level-section-step [state node level]
+  (let [node-heading? (= :heading (:type node))
+        current-level (current-section-level state)]
+    (cond
+      (and node-heading?
+           (<= (:heading-level node) level))
+      (start-section state node)
+
+      current-level
+      (append-to-current-section state node)
+
+      :else
+      state)))
+
 (defn- slice-sections [{:keys [level level-range]} nodes]
   (cond
     level-range
-    (let [[lo hi] level-range
-          in-range? (fn [node]
-                      (and (= :heading (:type node))
-                           (<= lo (:heading-level node) hi)))
-          heading? (fn [node] (= :heading (:type node)))
-          {:keys [sections current]}
-          (reduce
-           (fn [{:keys [sections current] :as state} node]
-             (cond
-               (and (in-range? node)
-                    (or (nil? current)
-                        (<= (:heading-level node) (:heading-level (:heading current)))))
-               {:sections (cond-> sections current (conj current))
-                :current {:heading node :body []}}
-
-               (and current
-                    (heading? node)
-                    (not (in-range? node))
-                    (<= (:heading-level node) (:heading-level (:heading current))))
-               {:sections (conj sections current)
-                :current nil}
-
-               current
-               {:sections sections
-                :current (update current :body conj node)}
-
-               :else state))
-           {:sections [] :current nil}
-           nodes)]
-      (cond-> sections current (conj current)))
+    (let [[lo hi] level-range]
+      (-> (reduce (fn [state node]
+                    (range-section-step state node lo hi))
+                  {:sections [] :current nil}
+                  nodes)
+          finish-sections))
 
     level
-    (let [{:keys [sections current]}
-          (reduce
-           (fn [{:keys [sections current] :as state} node]
-             (if (and (= :heading (:type node))
-                      (<= (:heading-level node) level))
-               {:sections (cond-> sections current (conj current))
-                :current {:heading node :body []}}
-               (if current
-                 {:sections sections
-                  :current (update current :body conj node)}
-                 state)))
-           {:sections [] :current nil}
-           nodes)]
-      (cond-> sections current (conj current)))
+    (-> (reduce (fn [state node]
+                  (level-section-step state node level))
+                {:sections [] :current nil}
+                nodes)
+        finish-sections)
 
     :else
     (top-level-sections nodes)))
@@ -827,55 +854,92 @@
               []
               (-> (md/parse text) :content first :content (or [])))})
 
+(defn- parse-raw-table-cells [raw]
+  (->> (string/split-lines raw)
+       (mapv parse-table-row-cells)))
+
+(defn- derive-raw-table-shape [all-cells]
+  (let [sep-idx (find-separator-row-index all-cells)
+        header-cells (first all-cells)
+        body-cell-rows (if sep-idx
+                         (subvec all-cells (inc sep-idx))
+                         (subvec all-cells 1))
+        max-cols (apply max (count header-cells) (map count body-cell-rows))
+        sep-cells (when sep-idx (nth all-cells sep-idx))]
+    {:header-cells header-cells
+     :body-cell-rows body-cell-rows
+     :max-cols max-cols
+     :sep-cells sep-cells}))
+
+(defn- pad-raw-table-shape
+  [{:keys [header-cells body-cell-rows max-cols sep-cells] :as table-shape}]
+  (assoc table-shape
+         :padded-header-cells (pad-row-to-length header-cells max-cols)
+         :padded-body-cell-rows (mapv #(pad-row-to-length % max-cols) body-cell-rows)
+         :alignments (parse-alignments sep-cells max-cols)))
+
+(defn- build-table-row [cell-type cells]
+  {:type :table-row
+   :content (mapv #(make-inline-cell cell-type %) cells)})
+
+(defn- build-normalized-table-content
+  [{:keys [padded-header-cells padded-body-cell-rows]}]
+  [{:type :table-head
+    :content [(build-table-row :table-header padded-header-cells)]}
+   {:type :table-body
+    :content (mapv #(build-table-row :table-data %) padded-body-cell-rows)}])
+
 (defn- normalize-table-from-raw
   "Given a table node with :raw-table, parses raw cells and rebuilds
    the table AST with all columns (including extra body columns)."
   [table]
   (if-let [raw (:raw-table table)]
-    (let [lines (string/split-lines raw)
-          all-cells (mapv parse-table-row-cells lines)
-          sep-idx (find-separator-row-index all-cells)
-          header-cells (first all-cells)
-          body-cell-rows (if sep-idx
-                           (subvec all-cells (inc sep-idx))
-                           (subvec all-cells 1))
-          max-cols (apply max (count header-cells) (map count body-cell-rows))
-          padded-header (pad-row-to-length header-cells max-cols)
-          padded-body (mapv #(pad-row-to-length % max-cols) body-cell-rows)
-          sep-cells (when sep-idx (nth all-cells sep-idx))
-          alignments (parse-alignments sep-cells max-cols)]
+    (let [all-cells (parse-raw-table-cells raw)
+          table-shape (derive-raw-table-shape all-cells)
+          padded-shape (pad-raw-table-shape table-shape)
+          table-content (build-normalized-table-content padded-shape)]
       (-> table
-          (assoc :content
-                 [{:type :table-head
-                   :content [{:type :table-row
-                              :content (mapv #(make-inline-cell :table-header %) padded-header)}]}
-                  {:type :table-body
-                   :content (mapv (fn [row]
-                                    {:type :table-row
-                                     :content (mapv #(make-inline-cell :table-data %) row)})
-                                  padded-body)}])
-          (assoc :alignments alignments)
+          (assoc :content table-content)
+          (assoc :alignments (:alignments padded-shape))
           (assoc :normalized? true)
           (dissoc :raw-table)))
     table))
 
+(defn- prepare-table-for-filtering [table]
+  (let [table (if (:raw-table table)
+                (normalize-table-from-raw table)
+                table)
+        head-row (-> table :content first :content first)
+        headers (mapv md/node->text (:content head-row))
+        body-rows (-> table :content second :content)]
+    {:table table
+     :headers headers
+     :body-rows body-rows}))
+
+(defn- select-table-column-indexes [col-matcher headers]
+  (if col-matcher
+    (keep-indexed (fn [i header]
+                    (when (text-matches? col-matcher header)
+                      i))
+                  headers)
+    (range (count headers))))
+
+(defn- row-matches? [row-matcher row]
+  (some #(text-matches? row-matcher (md/node->text %))
+        (:content row)))
+
+(defn- select-table-rows [row-matcher body-rows]
+  (if row-matcher
+    (filter #(row-matches? row-matcher %) body-rows)
+    body-rows))
+
 (defn- table-filter [{:keys [col-matcher row-matcher]} nodes]
   (let [tables (collect-nodes-deep #{:table} nodes)]
     (for [table tables
-          :let [table (if (:raw-table table)
-                        (normalize-table-from-raw table)
-                        table)
-                head-row (-> table :content first :content first)
-                headers (mapv #(md/node->text %) (:content head-row))
-                col-idxs (if col-matcher
-                           (keep-indexed (fn [i h] (when (text-matches? col-matcher h) i)) headers)
-                           (range (count headers)))
-                body-rows (-> table :content second :content)
-                matched-rows (cond->> body-rows
-                               row-matcher
-                               (filter (fn [row]
-                                         (some #(text-matches? row-matcher (md/node->text %))
-                                               (:content row)))))]
+          :let [{:keys [table headers body-rows]}
+                (prepare-table-for-filtering table)
+                col-idxs (select-table-column-indexes col-matcher headers)
+                matched-rows (select-table-rows row-matcher body-rows)]
           :when (seq col-idxs)]
       (rebuild-table table col-idxs matched-rows))))
 
