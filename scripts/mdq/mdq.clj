@@ -1042,27 +1042,31 @@
                   (swap! refs assoc text {:url href :title title :title-quote title-quote})
                   (str "[" text "]"))
       :reference (let [ref-id (:ref-id link-form)
-                        numeric-id (parse-long ref-id)]
-                    (if numeric-id
-                      ;; Numeric ref: reassign sequential
-                      (let [dedup-key [href title]
-                            ref-num (or (get @url->ref dedup-key)
-                                        (let [n (swap! counter inc)]
-                                          (swap! url->ref assoc dedup-key n)
-                                          n))]
-                        (swap! refs assoc ref-num {:url href :title title :title-quote title-quote})
-                        (str "[" text "][" ref-num "]"))
-                      ;; Non-numeric ref: preserve original ref-id
-                      (do
-                        (swap! refs assoc ref-id {:url href :title title :title-quote title-quote})
-                        (str "[" text "][" ref-id "]"))))
+                       numeric-id (parse-long ref-id)]
+                   (if numeric-id
+                     ;; Numeric ref: reassign sequential
+                     (let [dedup-key [href title]
+                           existing (get @url->ref dedup-key)
+                           ref-num (or existing
+                                       (let [n (swap! counter inc)]
+                                         (swap! url->ref assoc dedup-key n)
+                                         n))]
+                       (when-not existing
+                         (swap! refs assoc ref-num {:url href :title title :title-quote title-quote}))
+                       (str "[" text "][" ref-num "]"))
+                     ;; Non-numeric ref: preserve original ref-id
+                     (do
+                       (swap! refs assoc ref-id {:url href :title title :title-quote title-quote})
+                       (str "[" text "][" ref-id "]"))))
       ;; :inline or unknown — assign sequential numeric ref
       (let [dedup-key [href title]
-            ref-num (or (get @url->ref dedup-key)
+            existing (get @url->ref dedup-key)
+            ref-num (or existing
                         (let [n (swap! counter inc)]
                           (swap! url->ref assoc dedup-key n)
                           n))]
-        (swap! refs assoc ref-num {:url href :title title :title-quote title-quote})
+        (when-not existing
+          (swap! refs assoc ref-num {:url href :title title :title-quote title-quote}))
         (str "[" text "][" ref-num "]")))))
 
 (defn- emit-link-keep
@@ -2043,3 +2047,4 @@
     (when output (println output))
     (when error (binding [*out* *err*] (println error)))
     (System/exit exit)))
+
