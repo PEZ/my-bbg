@@ -5,12 +5,12 @@
   (:import [java.util.concurrent LinkedBlockingQueue]))
 
 (defn- run-command! [label cmd]
-  (println (str "\n▶ " label " starting..."))
+  (println (str "\n[RUN] " label))
   (flush)
   (let [result (p/shell {:continue true} cmd)]
     (if (zero? (:exit result))
-      (println (str "✓ " label " passed"))
-      (println (str "✗ " label " failed (exit " (:exit result) ")")))
+      (println (str "[PASS] " label))
+      (println (str "[FAIL] " label " (exit " (:exit result) ")")))
     (flush)))
 
 (defn- matches-extensions? [path extensions]

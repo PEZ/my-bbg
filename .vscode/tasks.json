@@ -19,7 +19,20 @@
       "command": "bb",
       "args": ["watch-test"],
       "isBackground": true,
-      "problemMatcher": [],
+      "problemMatcher": {
+        "owner": "bb-watch-test",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[RUN\\]",
+          "endsPattern": "^Watching for changes"
+        },
+        "pattern": {
+          "regexp": "^FAIL in \\((.+)\\) \\((.+):(\\d+)\\)",
+          "message": 1,
+          "file": 2,
+          "line": 3
+        }
+      },
       "presentation": {
         "reveal": "silent",
         "panel": "dedicated",
@@ -32,7 +45,18 @@
       "command": "bb",
       "args": ["watch-e2e"],
       "isBackground": true,
-      "problemMatcher": [],
+      "problemMatcher": {
+        "owner": "bb-watch-e2e",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[RUN\\]",
+          "endsPattern": "^Watching for changes"
+        },
+        "pattern": {
+          "regexp": "^FAIL (.+)",
+          "message": 1
+        }
+      },
       "presentation": {
         "reveal": "silent",
         "panel": "dedicated",
