@@ -490,7 +490,8 @@
           output (mdq/format-output nodes {:output "json"})
           parsed (json/parse-string output true)]
       (is (vector? (:items parsed)))
-      (is (contains? (first (:items parsed)) :paragraph)))))
+      (is (contains? (first (:items parsed)) :document))
+      (is (contains? (first (get-in parsed [:items 0 :document])) :paragraph)))))
 
 (deftest plain-text-output-test
   (testing "plain text output"

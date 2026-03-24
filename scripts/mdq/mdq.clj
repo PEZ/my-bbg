@@ -85,6 +85,8 @@
             inner (if quoted?
                     (process-escape-sequences (subs s1 1 (dec (count s1))))
                     s1)]
+        (when (and (not quoted?) (str/starts-with? inner "<"))
+          (throw (ex-info (str "Invalid text matcher: " s) {:matcher s})))
         (if quoted?
           ;; Quoted: case-sensitive
           (cond
@@ -912,8 +914,8 @@
     {:html (content-text node)}
 
     :front-matter
-    {:front-matter {:format (name (:format node))
-                    :content (:raw node)}}
+    {:front-matter {:variant (name (:format node))
+                    :body (:raw node)}}
 
     ;; default fallback
     (if-let [content (:content node)]
@@ -982,7 +984,46 @@
 
     :ruler []
 
+    :table
+    (let [rows (mapcat :content (:content node))]
+      (map (fn [row]
+             (str/trim (str/join " " (map #(str/trim (md/node->text %)) (:content row)))))
+           rows))
+
     [(node->plain-text node)]))
+
+(defn- wrap-list-items
+  "Wrap consecutive :list-item nodes into :bullet-list nodes."
+  [nodes]
+  (reduce (fn [acc node]
+            (if (= :list-item (:type node))
+              (let [prev (peek acc)]
+                (if (and prev (= :bullet-list (:type prev)))
+                  (update acc (dec (count acc)) update :content conj node)
+                  (conj acc {:type :bullet-list :content [node]})))
+              (conj acc node)))
+          []
+          nodes))
+
+(defn- split-by-separator
+  "Split nodes into groups at :result-separator boundaries."
+  [nodes]
+  (reduce (fn [groups node]
+            (if (= :result-separator (:type node))
+              (conj groups [])
+              (update groups (dec (count groups)) conj node)))
+          [[]]
+          nodes))
+
+(defn- extract-ref-links
+  "Extract reference link definitions from raw markdown text."
+  [markdown]
+  (let [pattern #"(?m)^\[([^\]]+)\]:\s+(\S+)(?:\s+\"([^\"]*)\")?\s*$"]
+    (->> (re-seq pattern markdown)
+         (reduce (fn [m [_ ref url title]]
+                   (assoc m ref (cond-> {:url url}
+                                  (seq title) (assoc :title title))))
+                 (sorted-map)))))
 
 (defn format-output [nodes opts]
   (let [output-kw (keyword (or (:output opts) "markdown"))
@@ -992,17 +1033,55 @@
       :plain (let [texts (mapcat node->plain-texts nodes)
                    sep (if (:br opts) "\n\n" "\n")]
                (str (str/join sep texts) "\n"))
-      (let [items (nodes->items nodes)
+      (let [clean-nodes (vec (remove #(= :result-separator (:type %)) nodes))
+            has-selector? (some? (:selector opts))
+            raw-md (:raw-md opts)
+            ref-links (when raw-md (extract-ref-links raw-md))
+            ;; For JSON, use reference format and trim code blocks
+            json? (= :json output-kw)
+            counter (atom 0)
+            url->ref (atom (if ref-links
+                             (reduce-kv (fn [m ref {:keys [url]}]
+                                          (assoc m url (parse-long ref)))
+                                        {} ref-links)
+                             {}))
+            refs (atom (sorted-map))
+            items (if (and json? has-selector?)
+                    ;; With selector: each group is a separate result
+                    (let [groups (split-by-separator nodes)]
+                      (binding [*emit-opts* {:link-format "reference"
+                                             :counter counter :url->ref url->ref :refs refs}]
+                        (vec (mapcat #(nodes->items (wrap-list-items %)) groups))))
+                    ;; No selector: all nodes as one batch
+                    (binding [*emit-opts* (when json?
+                                            {:link-format "reference"
+                                             :counter counter :url->ref url->ref :refs refs})]
+                      (nodes->items (wrap-list-items clean-nodes))))
+            items (if json?
+                    ;; Trim trailing newlines from code block content
+                    (walk/postwalk
+                     (fn [x]
+                       (if (and (map? x) (:code-block x))
+                         (update-in x [:code-block :code] str/trimr)
+                         x))
+                     items)
+                    items)
             footnotes (when-let [fns (:footnotes (:ast opts))]
                         (when (seq fns) fns))
-            result (cond-> {:items items}
-                     footnotes (assoc :footnotes footnotes))]
+            json-data (when json? (items->json-data items))
+            json-items (if (and json? (not has-selector?))
+                         [{:document json-data}]
+                         json-data)]
         (case output-kw
           :json (json/generate-string
-                 (cond-> {:items (items->json-data items)}
+                 (cond-> {:items json-items}
+                   (and (seq ref-links) (not has-selector?))
+                   (assoc :links ref-links)
                    footnotes (assoc :footnotes (items->json-data footnotes)))
                  {:pretty true})
-          :edn (with-out-str (pp/pprint result)))))))
+          :edn (let [result (cond-> {:items items}
+                              footnotes (assoc :footnotes footnotes))]
+                 (with-out-str (pp/pprint result))))))))
 
 (defn pre-process-front-matter [input]
   (let [lines (str/split-lines input)]
@@ -1113,7 +1192,7 @@
           (if (:quiet opts)
             (System/exit (if (seq results) 0 1))
             (if (seq results)
-              (println (format-output results (assoc opts :ast ast)))
+              (println (format-output results (assoc opts :ast ast :raw-md input)))
               (System/exit 1))))
         (catch Exception e
           (binding [*out* *err*]
