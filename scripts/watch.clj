@@ -34,12 +34,13 @@
         (println "Watching for changes...")
         (flush)
         (recur)))
-    ;; Set up file watchers
+    ;; Set up file watchers — filter only on extension, not event type,
+    ;; because VS Code's atomic save (write-to-temp + rename) may not
+    ;; produce :write events
     (doseq [dir dirs]
       (fw/watch dir
                (fn [event]
-                 (when (and (#{:write :write|chmod :create} (:type event))
-                            (matches-extensions? (:path event) extensions))
+                 (when (matches-extensions? (:path event) extensions)
                    (.put trigger :change)))
                {:recursive true}))
     ;; Trigger initial run
