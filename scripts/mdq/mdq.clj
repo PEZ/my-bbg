@@ -825,8 +825,9 @@
                                     (mapv (fn [group]
                                             (str/join "\n\n" (map emit-node group)))
                                           groups))
-                     defs (format-ref-definitions @refs)]
-                 (if (seq defs) (str body "\n\n" defs) body))))))
+                     defs (format-ref-definitions @refs)
+                     defs-sep (if (> (count groups) 1) group-sep "\n\n")]
+                 (if (seq defs) (str body defs-sep defs) body))))))
        ;; Inline format
        (str/join group-sep
                  (mapv (fn [group]
@@ -957,15 +958,31 @@
                    (update-in current-section [:section :body] conj item))
             (recur (next remaining) (conj result item) nil)))))))
 
+(defn- node->plain-text [node]
+  (case (:type node)
+    :softbreak "\n"
+    :text (:text node)
+    :code (or (get-in node [:attrs :value]) "")
+    (if (:content node)
+      (apply str (map node->plain-text (:content node)))
+      (or (:text node) ""))))
+
 (defn- node->plain-texts [node]
   (case (:type node)
+    :front-matter
+    (if-let [raw (:raw node)]
+      [raw]
+      [])
+
     (:bullet-list :numbered-list :todo-list)
-    (map md/node->text (:content node))
+    (map node->plain-text (:content node))
 
     :code
     [(str/trimr (md/node->text node))]
 
-    [(md/node->text node)]))
+    :ruler []
+
+    [(node->plain-text node)]))
 
 (defn format-output [nodes opts]
   (let [output-kw (keyword (or (:output opts) "markdown"))
@@ -1046,7 +1063,7 @@
           (= "--link-format" arg)
           (recur (nnext remaining) (assoc opts :link-format (second remaining)) selector-parts)
 
-          (= "--link-placement" arg)
+          (contains? #{"--link-placement" "--link-pos"} arg)
           (recur (nnext remaining) (assoc opts :link-placement (second remaining)) selector-parts)
 
           (= "--cwd" arg)
@@ -1060,7 +1077,7 @@
                      (case flag
                        "--output" (assoc opts :output value)
                        "--link-format" (assoc opts :link-format value)
-                       "--link-placement" (assoc opts :link-placement value)
+                       ("--link-placement" "--link-pos") (assoc opts :link-placement value)
                        opts)
                      selector-parts))
             (recur (next remaining) opts selector-parts))
