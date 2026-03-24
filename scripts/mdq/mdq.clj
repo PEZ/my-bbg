@@ -1327,37 +1327,6 @@
       b-num 1
       :else (compare (string/lower-case a) (string/lower-case b)))))
 
-(defn- collect-footnote-refs
-  "Collect footnote-ref labels from an AST node tree using safe manual walk.
-   Does not use clojure.walk (which hangs on footnote AST due to circular refs)."
-  [nodes]
-  (let [result (volatile! #{})]
-    (letfn [(walk [n]
-              (when (map? n)
-                (when (= :footnote-ref (:type n))
-                  (vswap! result conj (:label n)))
-                (when-let [children (:content n)]
-                  (run! walk children))))]
-      (run! walk nodes))
-    @result))
-
-(defn- collect-transitive-footnote-labels
-  "Given a set of initially-referenced footnote labels and a map of label->footnote-def,
-   transitively collect all footnote labels referenced within footnote bodies.
-   Uses BFS with cycle detection."
-  [initial-labels footnotes-by-label]
-  (loop [queue (seq initial-labels)
-         seen initial-labels]
-    (if-not queue
-      seen
-      (let [label (first queue)
-            fn-def (get footnotes-by-label label)
-            new-refs (if fn-def
-                       (set/difference (collect-footnote-refs (:content fn-def)) seen)
-                       #{})]
-        (recur (concat (rest queue) new-refs)
-               (into seen new-refs))))))
-
 (defn- format-footnote-definitions [footnote-label->num-atom footnotes-by-label renumber?]
   (when (seq @footnote-label->num-atom)
     (let [emit-fn-body (fn [fn-def]
