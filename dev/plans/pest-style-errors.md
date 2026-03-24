@@ -206,10 +206,12 @@ Targeted checks in individual parser branches.
 
 ### Phase 7: Documentation
 
-- [ ] Review and update developer docs affected by parser changes
-- [ ] No new lint errors
-- [ ] Unit tests pass
+- [x] Review and update developer docs affected by parser changes
+- [x] No new lint errors
+- [x] Unit tests pass
 - [ ] E2E tests pass
+
+Note: Reviewed [scripts/mdq/AGENTS.md](/Users/pez/.config/bbg/scripts/mdq/AGENTS.md) and [README.md](/Users/pez/.config/bbg/README.md); no documentation changes were needed for the parser-error work. Final verification reached `109 passed / 25 failed / 1 skipped`; `bad_queries.toml` is fully green and the remaining E2E failures are outside this pest-style parser-error plan scope.
 
 ---
 
