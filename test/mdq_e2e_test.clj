@@ -118,7 +118,8 @@
     {:pass pass :fail fail :skipped skipped :total (count results)}))
 
 (defn run-e2e!
-  "Run E2E tests. Options: :refresh (re-download specs), :spec (single spec file), :subprocess (use subprocess)."
+  "Run E2E tests.
+   Options: :refresh (re-download upstream cached specs), :spec (single spec file), :subprocess (use subprocess)."
   [{:keys [refresh spec] :as opts}]
   (e2e-specs/ensure-specs! :refresh? refresh)
   (let [specs (e2e-specs/load-specs :spec-file spec)

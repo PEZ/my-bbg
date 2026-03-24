@@ -5,7 +5,52 @@
             [cheshire.core :as json]
             [clojure.string :as str]))
 
-(def cache-dir "dev/test-specs/md_cases")
+(def specs-root-dir "dev/test-specs")
+
+(def upstream-cache-dir (str (fs/path specs-root-dir "md_cases")))
+
+(def local-specs-dir (str (fs/path specs-root-dir "local")))
+
+(defn- normalize-spec-file
+  [spec-file]
+  (let [root-prefix (re-pattern (str "^"
+                                     (java.util.regex.Pattern/quote specs-root-dir)
+                                     "/"))]
+    (some-> spec-file
+            (str/replace #"^\./" "")
+            (str/replace root-prefix ""))))
+
+(defn- spec-path->label
+  [spec-path]
+  (str (fs/relativize specs-root-dir spec-path)))
+
+(defn- spec-files
+  []
+  (->> [upstream-cache-dir local-specs-dir]
+       (filter fs/directory?)
+       (mapcat #(fs/glob % "*.toml"))
+       (map (fn [path]
+              {:label (spec-path->label path)
+               :name (str (fs/file-name path))
+               :path path}))
+       (sort-by :label)
+       vec))
+
+(defn- matching-spec-files
+  [spec-file]
+  (let [selector (normalize-spec-file spec-file)
+        files (spec-files)]
+    (if-not selector
+      files
+      (let [matches (filterv (fn [{:keys [label name]}]
+                               (or (= label selector)
+                                   (= name selector)))
+                             files)]
+        (when-not (seq matches)
+          (throw (ex-info (str "No E2E specs matched: " spec-file)
+                          {:spec-file spec-file
+                           :available (mapv :label files)})))
+        matches))))
 
 (defn- parse-toml
   "Parse a TOML string via Python 3.11+ tomllib. Returns Clojure map."
@@ -19,7 +64,7 @@
 (defn parse-spec
   "Parse a TOML spec string into canonical data shape.
    Returns {:file :given-md :given-files :expectations [...]}"
-  [toml-string file-name]
+  [toml-string file-label]
   (let [parsed (parse-toml toml-string)
         given-md (get-in parsed [:given :md])
         given-files (get-in parsed [:given :files])
@@ -33,39 +78,39 @@
                                    :output-json (boolean (:output_json data))
                                    :output-err (:output_err data)
                                    :ignore (:ignore data)})))]
-    {:file file-name
+                    {:file file-label
      :given-md given-md
      :given-files given-files
      :expectations expectations}))
 
 (defn download-specs!
-  "Download TOML spec files from GitHub. Skips existing unless refresh? is true."
+  "Download upstream TOML spec files from GitHub into the cache corpus.
+   Skips existing unless refresh? is true."
   [& {:keys [refresh?]}]
   (let [api-url "https://api.github.com/repos/yshavit/mdq/contents/tests/md_cases"
         resp (http/get api-url {:headers {"Accept" "application/vnd.github.v3+json"}})
         items (json/parse-string (:body resp) true)
         toml-files (filter #(str/ends-with? (:name %) ".toml") items)]
-    (fs/create-dirs cache-dir)
+    (fs/create-dirs upstream-cache-dir)
     (doseq [{:keys [name download_url]} toml-files
-            :let [target (fs/path cache-dir name)]
+            :let [target (fs/path upstream-cache-dir name)]
             :when (or refresh? (not (fs/exists? target)))]
       (let [resp (http/get download_url)]
         (spit (str target) (:body resp))
         (println "Downloaded" name)))
-    (println (str "Specs cached in " cache-dir " (" (count (fs/glob cache-dir "*.toml")) " files)"))))
+    (println (str "Specs cached in " upstream-cache-dir
+                  " (" (count (fs/glob upstream-cache-dir "*.toml")) " files)"))))
 
 (defn load-specs
-  "Load and parse specs from cache. Optional spec-file to load just one."
+  "Load and parse specs from the upstream cache and local corpus.
+   Optional spec-file may be a basename or a path relative to dev/test-specs."
   [& {:keys [spec-file]}]
-  (let [files (if spec-file
-                [(fs/path cache-dir spec-file)]
-                (sort (fs/glob cache-dir "*.toml")))]
-    (mapv (fn [f]
-            (parse-spec (slurp (str f)) (str (fs/file-name f))))
-          files)))
+  (mapv (fn [{:keys [label path]}]
+          (parse-spec (slurp (str path)) label))
+        (matching-spec-files spec-file)))
 
 (defn ensure-specs!
-  "Download specs if cache is empty, otherwise use cache."
+  "Download upstream specs if the upstream cache is empty, otherwise use cache."
   [& {:keys [refresh?]}]
-  (when (or refresh? (empty? (fs/glob cache-dir "*.toml")))
+  (when (or refresh? (empty? (fs/glob upstream-cache-dir "*.toml")))
     (download-specs! :refresh? refresh?)))

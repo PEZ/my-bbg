@@ -1,0 +1,40 @@
+[given]
+md = '''
+# One
+
+See [A](https://same.com) and [Again](https://same.com).
+
+# Two
+
+See [B](https://same.com).
+'''
+
+
+[expect."deduplicates repeated links with default section placement"]
+cli_args = []
+output = '''
+# One
+
+See [A][1] and [Again][1].
+
+[1]: https://same.com
+
+# Two
+
+See [B][1].
+'''
+
+
+[expect."deduplicates repeated links with explicit document placement"]
+cli_args = ["--link-format", "reference", "--link-placement", "doc"]
+output = '''
+# One
+
+See [A][1] and [Again][1].
+
+# Two
+
+See [B][1].
+
+[1]: https://same.com
+'''
