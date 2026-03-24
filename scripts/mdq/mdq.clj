@@ -675,13 +675,6 @@
            {:idx 0 :nodes []}
            nodes)))
 
-(defn- alignment->separator [a]
-  (case a
-    "left" ":---"
-    "right" "---:"
-    "center" ":---:"
-    "---"))
-
 (defn- content-text [node]
   (str/join (keep :text (:content node))))
 
