@@ -681,7 +681,8 @@
              (str/join "\n" (concat [(emit-row head-row) separator]
                                     (map emit-row (:content body)))))
     :block-formula (str "$$\n" (emit-inline-str (:content node)) "\n$$")
-    :front-matter (str "---\n" (:raw node) "\n---")
+    :front-matter (let [delim (if (= :toml (:format node)) "+++" "---")]
+                    (str delim "\n" (:raw node) "\n" delim))
     ;; fallback
     (if-let [content (:content node)]
       (str/join "\n" (map emit-node content))
