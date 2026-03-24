@@ -740,13 +740,14 @@
   ([nodes opts]
    (let [link-format (or (:link-format opts) "reference")
          link-placement (or (:link-placement opts) "section")
-         groups (separate-results nodes)]
+         groups (separate-results nodes)
+         group-sep (if (:no-br opts) "\n\n" "\n\n---\n\n")]
      (if (= "reference" link-format)
        (let [counter (atom 0)
              url->ref (atom {})]
          (if (= "section" link-placement)
            ;; Section placement: refs after each section group
-           (str/join "\n\n---\n\n"
+           (str/join group-sep
                      (mapv (fn [group]
                              (let [section-groups (group-nodes-by-section (vec group))]
                                (str/join "\n\n"
@@ -769,14 +770,14 @@
                                     :refs refs
                                     :counter counter
                                     :url->ref url->ref}]
-               (let [body (str/join "\n\n---\n\n"
+               (let [body (str/join group-sep
                                     (mapv (fn [group]
                                             (str/join "\n\n" (map emit-node group)))
                                           groups))
                      defs (format-ref-definitions @refs)]
                  (if (seq defs) (str body "\n\n" defs) body))))))
        ;; Inline format
-       (str/join "\n\n---\n\n"
+       (str/join group-sep
                  (mapv (fn [group]
                          (str/join "\n\n" (map emit-node group)))
                        groups))))))
@@ -906,7 +907,8 @@
             (recur (next remaining) (conj result item) nil)))))))
 
 (defn format-output [nodes opts]
-  (let [output-kw (keyword (or (:output opts) "markdown"))]
+  (let [output-kw (keyword (or (:output opts) "markdown"))
+        output-kw (if (= :md output-kw) :markdown output-kw)]
     (case output-kw
       :markdown (emit-markdown nodes opts)
       :plain (str/join "\n\n" (map md/node->text nodes))
@@ -969,6 +971,12 @@
           (or (= "-q" arg) (= "--quiet" arg))
           (recur (next remaining) (assoc opts :quiet true) selector-parts)
 
+          (= "--no-br" arg)
+          (recur (next remaining) (assoc opts :no-br true) selector-parts)
+
+          (= "--br" arg)
+          (recur (next remaining) (assoc opts :br true) selector-parts)
+
           (or (= "-h" arg) (= "--help" arg))
           (recur (next remaining) (assoc opts :help true) selector-parts)
 
@@ -996,11 +1004,7 @@
       (println "  -q, --quiet               Exit 0 if found, non-0 otherwise (no output)")
       (println "  -h, --help                Show this help")
       (System/exit 0))
-    (let [selector (:selector opts)
-          _ (when-not selector
-              (binding [*out* *err*]
-                (println "Error: no selector provided"))
-              (System/exit 1))]
+    (let [selector (:selector opts)]
       (try
         (let [input (slurp *in*)
               {:keys [front-matter body]} (pre-process-front-matter input)
@@ -1010,7 +1014,9 @@
               nodes (if front-matter
                       (into [(assoc front-matter :type :front-matter)] ast-nodes)
                       ast-nodes)
-              results (run-pipeline nodes selector)]
+              results (if selector
+                        (run-pipeline nodes selector)
+                        nodes)]
           (if (:quiet opts)
             (System/exit (if (seq results) 0 1))
             (if (seq results)
