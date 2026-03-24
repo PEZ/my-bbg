@@ -2002,36 +2002,44 @@
                         (str "Error: " (ex-message e)))
                :exit 1})))))))
 
-(defn exec! [args]
+(defn process-inputs
+  "Process inputs based on args. Returns {:output :exit :error}.
+   io-fns: {:read-stdin (fn [] string), :resolve-file (fn [path] string)}"
+  [args {:keys [read-stdin resolve-file]}]
   (let [opts (parse-args args)
-        files (:files opts)
-        cwd (:cwd opts)]
+        files (:files opts)]
     (if (seq files)
-      (let [stdin-content (delay (slurp *in*))
-            stdin-used? (atom false)
+      (let [stdin-used? (volatile! false)
             results (reduce (fn [acc file-path]
                               (if (= "-" file-path)
                                 (if @stdin-used?
                                   acc
-                                  (do (reset! stdin-used? true)
-                                      (conj acc (process @stdin-content args))))
-                                (let [f (if cwd
-                                          (java.io.File. cwd file-path)
-                                          (java.io.File. file-path))]
-                                  (if (.exists f)
-                                    (conj acc (process (slurp f) args))
+                                  (do (vreset! stdin-used? true)
+                                      (conj acc (process (read-stdin) args))))
+                                (try
+                                  (conj acc (process (resolve-file file-path) args))
+                                  (catch java.io.FileNotFoundException _
                                     (conj acc {:error (str "entity not found while reading file \"" file-path "\"")
                                                :exit 1})))))
                             [] files)
             errors (keep :error results)
             outputs (keep :output results)
             any-fail? (some #(pos? (:exit % 0)) results)]
-        (when (seq outputs)
-          (println (str/join "\n" (map str/trimr outputs))))
-        (when (seq errors)
-          (binding [*out* *err*] (doseq [e errors] (println e))))
-        (System/exit (if any-fail? 1 0)))
-      (let [{:keys [output error exit]} (process (slurp *in*) args)]
-        (when output (println output))
-        (when error (binding [*out* *err*] (println error)))
-        (System/exit exit)))))
+        {:output (when (seq outputs) (str/join "\n" (map str/trimr outputs)))
+         :error (when (seq errors) (str/join "\n" errors))
+         :exit (if any-fail? 1 0)})
+      (process (read-stdin) args))))
+
+(defn exec! [args]
+  (let [opts (parse-args args)
+        cwd (:cwd opts)
+        {:keys [output error exit]}
+        (process-inputs args
+                        {:read-stdin #(slurp *in*)
+                         :resolve-file (fn [path]
+                                         (slurp (if cwd
+                                                  (java.io.File. cwd path)
+                                                  (java.io.File. path))))})]
+    (when output (println output))
+    (when error (binding [*out* *err*] (println error)))
+    (System/exit exit)))

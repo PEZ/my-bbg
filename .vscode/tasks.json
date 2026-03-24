@@ -1,0 +1,52 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "BB nREPL",
+      "type": "shell",
+      "command": "mkdir -p bb && echo 16664 > bb/.nrepl-port && bb nrepl --port 16664",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "group": "dev"
+      }
+    },
+    {
+      "label": "Watch Unit Tests",
+      "type": "shell",
+      "command": "bb",
+      "args": ["watch-test"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "group": "dev"
+      }
+    },
+    {
+      "label": "Watch E2E Tests",
+      "type": "shell",
+      "command": "bb",
+      "args": ["watch-e2e"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "group": "dev"
+      }
+    },
+    {
+      "label": "Dev",
+      "dependsOn": ["BB nREPL", "Watch Unit Tests", "Watch E2E Tests"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

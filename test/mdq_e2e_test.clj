@@ -3,9 +3,10 @@
             [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.string :as str]
-            [e2e-specs]))
+            [e2e-specs]
+            [mdq]))
 
-(defn- run-mdq
+(defn- run-mdq-subprocess
   "Run bbg mdq as subprocess. Returns {:exit :out :err}."
   [markdown cli-args {:keys [dir]}]
   (let [result (apply p/shell
@@ -15,6 +16,28 @@
     {:exit (:exit result)
      :out (:out result)
      :err (:err result)}))
+
+(defn- run-mdq-in-process
+  "Run mdq in-process. Returns {:exit :out :err}.
+   Adds trailing newline to output/error to match subprocess println behavior."
+  [markdown cli-args {:keys [dir]}]
+  (let [resolve-file (fn [path]
+                       (slurp (if dir
+                                (java.io.File. (str dir) path)
+                                (java.io.File. path))))
+        {:keys [output error exit]} (mdq/process-inputs cli-args
+                                                        {:read-stdin (constantly markdown)
+                                                         :resolve-file resolve-file})]
+    {:exit exit
+     :out (if output (str output "\n") "")
+     :err (if error (str error "\n") "")}))
+
+(defn- run-mdq
+  "Run mdq, in-process by default. Pass :subprocess true for subprocess mode."
+  [markdown cli-args opts]
+  (if (:subprocess opts)
+    (run-mdq-subprocess markdown cli-args opts)
+    (run-mdq-in-process markdown cli-args opts)))
 
 (defn- normalize-expected
   "Temporary normalization of expected output.
@@ -30,7 +53,7 @@
 (defn- run-test-case
   "Run one test expectation, return result map."
   [{:keys [given-md given-files file]} {:keys [name cli-args expected-output expect-success
-                                               output-json output-err ignore]}]
+                                               output-json output-err ignore]} opts]
   (if ignore
     {:spec file :test name :status :skipped :reason ignore}
     (let [;; Create temp files if spec has file definitions
@@ -39,7 +62,7 @@
                       (doseq [[fname content] given-files]
                         (spit (str (fs/path d (clojure.core/name fname))) content))
                       d))
-          {:keys [exit out err]} (run-mdq given-md cli-args {:dir (when tmp-dir (str tmp-dir))})
+          {:keys [exit out err]} (run-mdq given-md cli-args (merge opts {:dir (when tmp-dir (str tmp-dir))}))
           exit-ok? (if expect-success (zero? exit) (not (zero? exit)))
           output-ok? (cond
                        (nil? expected-output) true
@@ -60,10 +83,10 @@
 
 (defn- run-specs
   "Run all test cases across specs. Returns results vector."
-  [specs]
+  [specs opts]
   (vec (for [spec specs
              expectation (:expectations spec)]
-         (run-test-case spec expectation))))
+         (run-test-case spec expectation opts))))
 
 (defn- report-results
   "Print a summary of test results. Returns summary map."
@@ -103,13 +126,13 @@
     {:pass pass :fail fail :skipped skipped :total (count results)}))
 
 (defn run!
-  "Run E2E tests. Options: :refresh (re-download specs), :spec (single spec file)."
-  [{:keys [refresh spec]}]
+  "Run E2E tests. Options: :refresh (re-download specs), :spec (single spec file), :subprocess (use subprocess)."
+  [{:keys [refresh spec subprocess] :as opts}]
   (e2e-specs/ensure-specs! :refresh? refresh)
   (let [specs (e2e-specs/load-specs :spec-file spec)
         _ (println (str "Running " (count specs) " specs, "
                         (reduce + (map (comp count :expectations) specs))
                         " test cases..."))
-        results (run-specs specs)
+        results (run-specs specs (select-keys opts [:subprocess]))
         {:keys [fail]} (report-results results)]
     (System/exit (if (zero? fail) 0 1))))

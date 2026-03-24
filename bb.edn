@@ -1,5 +1,6 @@
 {:paths ["scripts" "scripts/mdq" "test"]
  :deps {org.babashka/cli {:mvn/version "0.2.23"}}
+ :pods {org.babashka/fswatcher {:version "0.0.7"}}
  :tasks
  {:requires ([babashka.cli :as cli]
              config-save
@@ -7,7 +8,8 @@
              java-version
              loc
              mdq
-             mdq-e2e-test)
+             mdq-e2e-test
+             watch)
 
   :enter (def cwd (:cwd (cli/parse-opts *command-line-args*)))
 
@@ -35,13 +37,36 @@
   mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq [options] '<selector>'. Options: --output FORMAT, --link_format FORMAT, --link-placement PLACE, --quiet, --help"
        :task (mdq/exec! *command-line-args*)}
 
-  e2e-test {:doc "Run E2E compatibility tests against Rust mdq specs. Options: --refresh, --spec FILE"
+  e2e-test {:doc "Run E2E compatibility tests against Rust mdq specs. Options: --refresh, --spec FILE, --subprocess"
             :task (mdq-e2e-test/run!
                    (cli/parse-opts *command-line-args*
                                    {:coerce {:refresh :boolean
-                                             :spec :string}}))}
+                                             :spec :string
+                                             :subprocess :boolean}}))}
 
   test {:doc "Run tests"
         :task (do (require 'mdq-test :reload)
                   (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test)]
-                    (System/exit (if (zero? (+ fail error)) 0 1))))}}}
+                    (System/exit (if (zero? (+ fail error)) 0 1))))}
+
+  nrepl {:doc "Start nREPL server and write port to .nrepl-port. Options: --port PORT (default 1667)"
+         :requires ([babashka.fs :as fs]
+                    [babashka.nrepl.server :as srv])
+         :task (let [port (or (:port (cli/parse-opts *command-line-args* {:coerce {:port :int}})) 1667)]
+                 (srv/start-server! {:host "localhost"
+                                     :port port})
+                 (spit ".nrepl-port" (str port))
+                 (-> (Runtime/getRuntime)
+                     (.addShutdownHook
+                      (Thread. (fn [] (fs/delete ".nrepl-port")))))
+                 (deref (promise)))}
+
+  watch-test {:doc "Watch scripts/ and test/ and re-run unit tests on changes"
+              :task (watch/watch! "Unit Tests" "bb test"
+                                 ["scripts" "test"]
+                                 {:extensions [".clj"]})}
+
+  watch-e2e {:doc "Watch scripts/, test/, and test specs, re-run E2E tests on changes"
+             :task (watch/watch! "E2E Tests" "bb e2e-test"
+                                ["scripts" "test" "dev/test-specs"]
+                                {:extensions [".clj" ".toml"]})}}}
