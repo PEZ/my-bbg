@@ -40,19 +40,35 @@
                                    :input "# \"\\u{FFFFFF}\""})))))
 
 (deftest throw-parse-error-test
-  (let [error (try
-                (binding [mdq/*selector-input* "# bad"]
-                  (mdq/throw-parse-error 3 "boom" :end-col 5))
-                (catch clojure.lang.ExceptionInfo e
-                  e))]
-    (is (instance? clojure.lang.ExceptionInfo error))
-    (is (= {:type :parse-error
-            :col 3
-            :end-col 5
-            :message "boom"
-            :input "# bad"}
-           (select-keys (ex-data error)
-                        [:type :col :end-col :message :input])))))
+  (testing "keeps relative columns without a segment offset"
+    (let [error (try
+                  (binding [mdq/*selector-input* "# bad"]
+                    (mdq/throw-parse-error 3 "boom" :end-col 5))
+                  (catch clojure.lang.ExceptionInfo e
+                    e))]
+      (is (instance? clojure.lang.ExceptionInfo error))
+      (is (= {:type :parse-error
+              :col 3
+              :end-col 5
+              :message "boom"
+              :input "# bad"}
+             (select-keys (ex-data error)
+                          [:type :col :end-col :message :input])))))
+  (testing "applies pipeline segment offsets to absolute columns"
+    (let [error (try
+                  (binding [mdq/*selector-input* "# * | bad"
+                            mdq/*selector-offset* 6]
+                    (mdq/throw-parse-error 1 "boom" :end-col 3))
+                  (catch clojure.lang.ExceptionInfo e
+                    e))]
+      (is (instance? clojure.lang.ExceptionInfo error))
+      (is (= {:type :parse-error
+              :col 7
+              :end-col 9
+              :message "boom"
+              :input "# * | bad"}
+             (select-keys (ex-data error)
+                          [:type :col :end-col :message :input]))))))
 
 (deftest parse-text-matcher-test
   (testing "nil/empty/wildcard returns nil"
@@ -115,7 +131,34 @@
                 :message "expected valid query"
                 :input selector}
                (select-keys (ex-data error) [:type :col :message :input]))
-            (str selector " should report the phase-2 valid-query parse error"))))))
+            (str selector " should report the phase-2 valid-query parse error")))))
+  (testing "phase 3 structural rejections return precise parse errors"
+    (doseq [[selector expected]
+            [["#foo"
+              {:type :parse-error
+               :col 2
+               :message "expected end of input, space, or section options"
+               :input "#foo"}]
+             ["# $hello^"
+              {:type :parse-error
+               :col 3
+               :message "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""
+               :input "# $hello^"}]
+             ["- [*]"
+              {:type :parse-error
+               :col 4
+               :message "expected \"[x]\", \"[x]\", or \"[?]\""
+               :input "- [*]"}]]]
+      (let [error (try
+                    (binding [mdq/*selector-input* selector]
+                      (mdq/parse-selector selector))
+                    (catch clojure.lang.ExceptionInfo e
+                      e))]
+        (is (instance? clojure.lang.ExceptionInfo error)
+            (str selector " should throw ExceptionInfo"))
+        (is (= expected
+               (select-keys (ex-data error) [:type :col :message :input]))
+            (str selector " should report the phase-3 structural parse error"))))))
 
 (deftest slice-sections-test
   (let [nodes (:content (md/parse "# A\nfoo\n\n# B\nbar\n\n## C\nbaz"))]
@@ -142,7 +185,19 @@
     (testing "single selector"
       (is (= "# A\n\nfoo\n\n## B\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A")))))
     (testing "piped selectors"
-      (is (= "## B\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A | ## B")))))))
+      (is (= "## B\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A | ## B")))))
+    (testing "invalid later pipeline stage reports absolute column"
+      (let [selector "# * | :-: *"
+            error (try
+                    (mdq/run-pipeline nodes selector)
+                    (catch clojure.lang.ExceptionInfo e
+                      e))]
+        (is (instance? clojure.lang.ExceptionInfo error))
+        (is (= {:type :parse-error
+                :col 7
+                :message "expected end of input or selector"
+                :input selector}
+               (select-keys (ex-data error) [:type :col :message :input])))))))
 
 (deftest emit-markdown-test
   (testing "heading roundtrip"

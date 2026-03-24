@@ -142,13 +142,13 @@ Note: the table-side phase-2 guard is intentionally narrow to reject the known i
 
 Add post-parse validation for selector structure.
 
-- [ ] Section selector: after `#`/`##`/etc., require space or `{` — reject `#foo` at col 2
-- [ ] Section text matcher: validate anchor ordering — reject `$ ... ^` pattern at col of unexpected token
-- [ ] Task list: validate bracket content is exactly `x`, `X`, ` `, or `?` — reject `[*]` at col 4
-- [ ] Pipeline: use offset from `split-pipeline` to report absolute position for errors in later pipeline stages — reject invalid selector after `|` at correct col
-- [ ] No new lint errors
-- [ ] Unit tests pass
-- [ ] E2E: 4 new passes (target: 96/135)
+- [x] Section selector: after `#`/`##`/etc., require space or `{` — reject `#foo` at col 2
+- [x] Section text matcher: validate anchor ordering — reject `$ ... ^` pattern at col of unexpected token
+- [x] Task list: validate bracket content is exactly `x`, `X`, ` `, or `?` — reject `[*]` at col 4
+- [x] Pipeline: use offset from `split-pipeline` to report absolute position for errors in later pipeline stages — reject invalid selector after `|` at correct col
+- [x] No new lint errors
+- [x] Unit tests pass
+- [x] E2E: 4 new passes (target: 96/135)
 
 **What the system can do now:** Structural validation catches malformed selectors with correct positions, including across pipeline boundaries.
 

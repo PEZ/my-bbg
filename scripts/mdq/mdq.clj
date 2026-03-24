@@ -7,6 +7,8 @@
 
 (def ^:dynamic *selector-input* nil)
 
+(def ^:dynamic *selector-offset* 0)
+
 (defn format-pest-error [{:keys [col end-col message input]}]
   (let [col (or col 1)
         input (or input "")
@@ -23,12 +25,14 @@
          "  = " message)))
 
 (defn throw-parse-error [col message & {:keys [end-col]}]
-  (throw (ex-info message
-                  (cond-> {:type :parse-error
-                           :col col
-                           :message message
-                           :input *selector-input*}
-                    end-col (assoc :end-col end-col)))))
+  (let [absolute-col (+ *selector-offset* col)
+        absolute-end-col (when end-col (+ *selector-offset* end-col))]
+    (throw (ex-info message
+                    (cond-> {:type :parse-error
+                             :col absolute-col
+                             :message message
+                             :input *selector-input*}
+                      absolute-end-col (assoc :end-col absolute-end-col))))))
 
 (defn split-pipeline [s]
   (letfn [(segment-entry [segment-text start-offset]
@@ -144,6 +148,11 @@
     ((:match-fn matcher) text)
     (matcher text)))
 
+(defn- matcher-start-col [prefix-len selector]
+  (let [raw-tail (subs selector prefix-len)
+        left-trim (- (count raw-tail) (count (str/triml raw-tail)))]
+    (+ prefix-len left-trim 1)))
+
 (defn parse-selector [s]
   (let [s (str/trim s)
         table-parts (when (str/starts-with? s ":-:")
@@ -181,22 +190,35 @@
              :matcher (parse-text-matcher text)})
           (let [hashes (re-find #"^#+" s)
                 level (count hashes)
-                text (str/trim (subs s level))]
-            {:type :section
-             :level (when (> level 1) level)
-             :matcher (parse-text-matcher text)})))
+                next-char (nth s level nil)]
+            (when (and next-char
+                       (not (Character/isWhitespace ^char next-char))
+                       (not= next-char \{))
+              (throw-parse-error (inc level)
+                                 "expected end of input, space, or section options"))
+            (let [text-col (matcher-start-col level s)
+                  text (str/trim (subs s level))]
+              (when (str/starts-with? text "$")
+                (throw-parse-error text-col
+                                   "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
+              {:type :section
+               :level (when (> level 1) level)
+               :matcher (parse-text-matcher text)}))))
 
       ;; Task: - [ ] unchecked, - [x] checked, - [?] any task
-      (re-find #"^- \[[ x?]\]" s)
-      (let [marker (subs s 2 5)
-            task-kind (case marker
-                        "[x]" :checked
-                        "[ ]" :unchecked
-                        "[?]" :any)
-            text (str/trim (subs s 5))]
-        {:type :task
-         :task-kind task-kind
-         :matcher (parse-text-matcher text)})
+      (str/starts-with? s "- [")
+      (let [marker-end (str/index-of s "]")
+            marker (when marker-end (subs s 2 (inc marker-end)))]
+        (if (contains? #{"[x]" "[ ]" "[?]"} marker)
+          (let [task-kind (case marker
+                            "[x]" :checked
+                            "[ ]" :unchecked
+                            "[?]" :any)
+                text (str/trim (subs s (+ 2 (count marker))))]
+            {:type :task
+             :task-kind task-kind
+             :matcher (parse-text-matcher text)})
+          (throw-parse-error 4 "expected \"[x]\", \"[x]\", or \"[?]\"")))
 
       ;; Ordered list: 1. text (with optional task syntax)
       (str/starts-with? s "1.")
@@ -650,7 +672,17 @@
   (binding [*selector-input* selector-str]
     (let [segments (split-pipeline selector-str)
           selectors (mapv (fn [{:keys [text offset]}]
-                            (assoc (parse-selector text) :offset offset))
+                            (binding [*selector-offset* (dec offset)]
+                              (try
+                                (assoc (parse-selector text) :offset offset)
+                                (catch clojure.lang.ExceptionInfo e
+                                  (let [{:keys [type col message]} (ex-data e)]
+                                    (if (and (= :parse-error type)
+                                             (> offset 1)
+                                             (= col offset)
+                                             (= message "expected valid query"))
+                                      (throw-parse-error 1 "expected end of input or selector")
+                                      (throw e)))))))
                           segments)
           result (reduce (fn [nodes sel]
                            ((selector->filter-fn sel) nodes))
