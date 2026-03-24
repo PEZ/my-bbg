@@ -99,8 +99,23 @@
     (is (= 3 (:level (mdq/parse-selector "###")))))
   (testing "section without text has nil matcher"
     (is (nil? (:matcher (mdq/parse-selector "#")))))
-  (testing "unknown selector throws"
-    (is (thrown? Exception (mdq/parse-selector "unknown")))))
+  (testing "single-column table selectors remain valid"
+    (is (= :table (:type (mdq/parse-selector ":-: Name")))))
+  (testing "phase 2 dispatch rejections return parse errors at col 1"
+    (doseq [selector ["\"hello\"" "~" "2. hello" ":-: *" "P *" "P : *"]]
+      (let [error (try
+                    (binding [mdq/*selector-input* selector]
+                      (mdq/parse-selector selector))
+                    (catch clojure.lang.ExceptionInfo e
+                      e))]
+        (is (instance? clojure.lang.ExceptionInfo error)
+            (str selector " should throw ExceptionInfo"))
+        (is (= {:type :parse-error
+                :col 1
+                :message "expected valid query"
+                :input selector}
+               (select-keys (ex-data error) [:type :col :message :input]))
+            (str selector " should report the phase-2 valid-query parse error"))))))
 
 (deftest slice-sections-test
   (let [nodes (:content (md/parse "# A\nfoo\n\n# B\nbar\n\n## C\nbaz"))]

@@ -145,8 +145,23 @@
     (matcher text)))
 
 (defn parse-selector [s]
-  (let [s (str/trim s)]
+  (let [s (str/trim s)
+        table-parts (when (str/starts-with? s ":-:")
+                      (str/split s #":-:" -1))
+        table-col-text (some-> table-parts second str/trim)]
     (cond
+      (or (str/starts-with? s "\"")
+          (str/starts-with? s "'")
+          (str/starts-with? s "~")
+          (and (re-find #"^\d" s)
+               (not (str/starts-with? s "1.")))
+          (and (str/starts-with? s "P")
+               (not (str/starts-with? s "P:")))
+          (and table-parts
+               (< (count table-parts) 3)
+               (= "*" table-col-text)))
+      (throw-parse-error 1 "expected valid query")
+
       ;; Section: # or ## or ### etc, or #{2,4} range syntax
       (str/starts-with? s "#")
       (let [range-match (re-find #"^#\{(\d*)(,?)(\d*)\}(.*)" s)]
@@ -184,8 +199,8 @@
          :matcher (parse-text-matcher text)})
 
       ;; Ordered list: 1. text (with optional task syntax)
-      (re-find #"^\d+\." s)
-      (let [text (str/trim (str/replace-first s #"^\d+\.\s*" ""))
+      (str/starts-with? s "1.")
+      (let [text (str/trim (str/replace-first s #"^1\.\s*" ""))
             task-match (re-find #"^\[[ x?]\]" text)]
         (if task-match
           (let [marker (subs text 0 3)
@@ -298,7 +313,7 @@
          :row-matcher (parse-text-matcher row-text)})
 
       :else
-      (throw (ex-info (str "Unknown selector: " s) {:selector s})))))
+      (throw-parse-error 1 "expected valid query"))))
 
 (defn- top-level-sections
   "Extract top-level sections: each heading starts a section, body extends

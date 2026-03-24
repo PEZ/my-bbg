@@ -124,13 +124,15 @@ Note: `throw-parse-error` remains public temporarily to avoid an unused-private 
 
 Tighten `parse-selector` catch-all and add upfront checks for inputs that should never reach the parser.
 
-- [ ] In `parse-selector`, replace the `:else` branch's `ex-info` with `throw-parse-error` at col 1, message "expected valid query"
-- [ ] Add upfront validation before the `cond`: reject selectors starting with `"`, `'`, digit (unless `1.`), or `~`
-- [ ] Validate `P` selector requires `:` immediately after (no space, no other char) — reject `P *` and `P : *` at col 1
-- [ ] Validate `:-:` table selector requires at least 2 column groups — reject single `:-: *` at col 1
-- [ ] No new lint errors
-- [ ] Unit tests pass
-- [ ] E2E: 6 new passes (target: 92/135)
+- [x] In `parse-selector`, replace the `:else` branch's `ex-info` with `throw-parse-error` at col 1, message "expected valid query"
+- [x] Add upfront validation before the `cond`: reject selectors starting with `"`, `'`, digit (unless `1.`), or `~`
+- [x] Validate `P` selector requires `:` immediately after (no space, no other char) — reject `P *` and `P : *` at col 1
+- [x] Validate `:-:` table selector requires at least 2 column groups — reject single `:-: *` at col 1
+- [x] No new lint errors
+- [x] Unit tests pass
+- [x] E2E: 6 new passes (target: 92/135)
+
+Note: the table-side phase-2 guard is intentionally narrow to reject the known invalid `:-: *` form without breaking valid single-column selectors such as `:-: Name`.
 
 **What the system can do now:** The 6 simplest error cases produce correct pest-style messages. Parser still accepts all valid queries.
 
