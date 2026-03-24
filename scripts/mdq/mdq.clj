@@ -842,14 +842,17 @@
     :strong (str "**" (emit-inline-str (:content node)) "**")
     :em (str "_" (emit-inline-str (:content node)) "_")
     :strikethrough (str "~~" (emit-inline-str (:content node)) "~~")
-    :footnote-ref (if-let [label->num (:footnote-label->num *emit-opts*)]
-                    (let [label (:label node)
-                          num (or (get @label->num label)
-                                  (let [n (swap! (:footnote-counter *emit-opts*) inc)]
-                                    (swap! label->num assoc label n)
-                                    n))]
-                      (str "[^" num "]"))
-                    (str "[^" (:label node) "]"))
+    :footnote-ref (let [label (:label node)]
+                    (if-let [label->num (:footnote-label->num *emit-opts*)]
+                      (if (not= false (:renumber-footnotes *emit-opts*))
+                        (let [num (or (get @label->num label)
+                                      (let [n (swap! (:footnote-counter *emit-opts*) inc)]
+                                        (swap! label->num assoc label n)
+                                        n))]
+                          (str "[^" num "]"))
+                        (do (swap! label->num assoc label label)
+                            (str "[^" label "]")))
+                      (str "[^" label "]")))
     :link (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
             (let [{:keys [url->ref counter refs]} *emit-opts*
                   href (get-in node [:attrs :href])
@@ -1016,23 +1019,43 @@
                        (str "[" n "]: " url)))
                    (sort-by key refs-map)))))
 
-(defn format-footnote-definitions [label->num-map footnotes-by-label]
-  (let [sorted-entries (sort-by val label->num-map)]
-    (when (seq sorted-entries)
-      (str/join "\n"
-                (map (fn [[label num]]
-                       (let [fn-def (get footnotes-by-label label)
-                             fn-body (str/join "\n\n" (map (fn [block]
-                                                             (emit-inline-str (:content block)))
-                                                           (:content fn-def)))]
-                         (str "[^" num "]: " fn-body)))
-                     sorted-entries)))))
+(defn- footnote-label-comparator [a b]
+  (let [a-num (parse-long a)
+        b-num (parse-long b)]
+    (cond
+      (and a-num b-num) (compare a-num b-num)
+      a-num -1
+      b-num 1
+      :else (compare (str/lower-case a) (str/lower-case b)))))
+
+(defn format-footnote-definitions [label->num-map footnotes-by-label renumber?]
+  (when (seq label->num-map)
+    (if renumber?
+      (let [sorted-entries (sort-by val label->num-map)]
+        (str/join "\n"
+                  (map (fn [[label num]]
+                         (let [fn-def (get footnotes-by-label label)
+                               fn-body (str/join "\n\n" (map (fn [block]
+                                                               (emit-inline-str (:content block)))
+                                                             (:content fn-def)))]
+                           (str "[^" num "]: " fn-body)))
+                       sorted-entries)))
+      (let [sorted-labels (sort footnote-label-comparator (keys label->num-map))]
+        (str/join "\n"
+                  (map (fn [label]
+                         (let [fn-def (get footnotes-by-label label)
+                               fn-body (str/join "\n\n" (map (fn [block]
+                                                               (emit-inline-str (:content block)))
+                                                             (:content fn-def)))]
+                           (str "[^" label "]: " fn-body)))
+                       sorted-labels))))))
 
 (defn emit-markdown
   ([nodes] (emit-markdown nodes nil))
   ([nodes opts]
    (let [link-format (or (:link-format opts) "reference")
          link-placement (or (:link-placement opts) "section")
+         renumber-footnotes (get opts :renumber-footnotes true)
          groups (separate-results nodes)
          group-sep (if (:no-br opts) "\n\n" "\n\n---\n\n")
          footnotes (when-let [fns (:footnotes (:ast opts))]
@@ -1058,7 +1081,8 @@
                                                                                 :counter counter
                                                                                 :url->ref url->ref
                                                                                 :footnote-label->num footnote-label->num
-                                                                                :footnote-counter footnote-counter}]
+                                                                                :footnote-counter footnote-counter
+                                                                                :renumber-footnotes renumber-footnotes}]
                                                            (let [body (str/join "\n\n" (map emit-node sg))
                                                                  defs (format-ref-definitions @refs)]
                                                              (if (seq defs)
@@ -1073,7 +1097,8 @@
                                           :counter counter
                                           :url->ref url->ref
                                           :footnote-label->num footnote-label->num
-                                          :footnote-counter footnote-counter}]
+                                          :footnote-counter footnote-counter
+                                          :renumber-footnotes renumber-footnotes}]
                      (let [body (str/join group-sep
                                           (mapv (fn [group]
                                                   (str/join "\n\n" (map emit-node group)))
@@ -1083,13 +1108,14 @@
                        (if (seq defs) (str body defs-sep defs) body))))))
              ;; Inline format
              (binding [*emit-opts* {:footnote-label->num footnote-label->num
-                                    :footnote-counter footnote-counter}]
+                                    :footnote-counter footnote-counter
+                                    :renumber-footnotes renumber-footnotes}]
                (str/join group-sep
                          (mapv (fn [group]
                                  (str/join "\n\n" (map emit-node group)))
                                groups))))
            fn-defs (when footnotes-by-label
-                     (format-footnote-definitions @footnote-label->num footnotes-by-label))]
+                     (format-footnote-definitions @footnote-label->num footnotes-by-label renumber-footnotes))]
        (if (seq fn-defs)
          (str main-output "\n\n" fn-defs)
          main-output)))))
