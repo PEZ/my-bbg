@@ -59,7 +59,7 @@
 (deftest parse-selector-test
   (testing "section selector"
     (is (= :section (:type (mdq/parse-selector "# hello"))))
-    (is (= 1 (:level (mdq/parse-selector "# hello"))))
+    (is (nil? (:level (mdq/parse-selector "# hello"))))
     (is (= 2 (:level (mdq/parse-selector "## hello"))))
     (is (= 3 (:level (mdq/parse-selector "###")))))
   (testing "section without text has nil matcher"
@@ -406,8 +406,8 @@
       (is (= [1 3] level-range))))
   (testing "section level range filtering"
     (let [nodes (:content (md/parse "# H1\nA\n## H2\nB\n### H3\nC\n#### H4\nD"))]
-      (is (= 2 (count (mdq/slice-sections {:level-range [2 3]} nodes))))
-      (is (= "## H2\n\nB\n\n---\n\n### H3\n\nC\n\n#### H4\n\nD"
+      (is (= 1 (count (mdq/slice-sections {:level-range [2 3]} nodes))))
+      (is (= "## H2\n\nB\n\n### H3\n\nC\n\n#### H4\n\nD"
              (mdq/emit-markdown (mdq/run-pipeline nodes "#{2,3}")))))))
 
 (deftest ordered-task-selector-test

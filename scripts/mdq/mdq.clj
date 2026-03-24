@@ -143,7 +143,7 @@
                 level (count hashes)
                 text (str/trim (subs s level))]
             {:type :section
-             :level level
+             :level (when (> level 1) level)
              :matcher (parse-text-matcher text)})))
 
       ;; Task: - [ ] unchecked, - [x] checked, - [?] any task
@@ -267,28 +267,108 @@
       :else
       (throw (ex-info (str "Unknown selector: " s) {:selector s})))))
 
+(defn- top-level-sections
+  "Extract top-level sections: each heading starts a section, body extends
+   until the next heading at <= its level. Headings within a prior section's
+   body are skipped (they are subsections)."
+  [nodes]
+  (let [headings (keep-indexed
+                  (fn [idx node]
+                    (when (= :heading (:type node))
+                      {:idx idx :level (:heading-level node)}))
+                  nodes)]
+    (loop [[h & more] headings
+           skip-until nil
+           sections []]
+      (if-not h
+        sections
+        (if (and skip-until (< (:idx h) skip-until))
+          (recur more skip-until sections)
+          (let [level (:level h)
+                end (or (some (fn [h2]
+                                (when (and (> (:idx h2) (:idx h))
+                                           (<= (:level h2) level))
+                                  (:idx h2)))
+                              more)
+                        (count nodes))
+                section {:heading (nth nodes (:idx h))
+                         :body (subvec (vec nodes) (inc (:idx h)) end)}]
+            (recur more end (conj sections section))))))))
+
+(defn- find-sections-by-text
+  "For single # with text matcher: search ALL headings for text match,
+   then extract section at matched heading's native level."
+  [matcher nodes]
+  (let [nodes-vec (vec nodes)]
+    (->> nodes-vec
+         (keep-indexed
+          (fn [idx node]
+            (when (and (= :heading (:type node))
+                       (text-matches? matcher (md/node->text node)))
+              (let [level (:heading-level node)
+                    end (or (some (fn [j]
+                                   (let [n (nth nodes-vec j)]
+                                     (when (and (= :heading (:type n))
+                                                (<= (:heading-level n) level))
+                                       j)))
+                                 (range (inc idx) (count nodes-vec)))
+                            (count nodes-vec))]
+                {:heading node
+                 :body (subvec nodes-vec (inc idx) end)}))))
+         vec)))
+
 (defn slice-sections [{:keys [level level-range]} nodes]
-  (let [matches-heading? (if level-range
-                           (fn [node]
-                             (let [[lo hi] level-range]
-                               (and (= :heading (:type node))
-                                    (<= lo (:heading-level node) hi))))
-                           (fn [node]
-                             (and (= :heading (:type node))
-                                  (<= (:heading-level node) level))))
-        {:keys [sections current]}
-        (reduce (fn [{:keys [sections current]} node]
-                  (if (matches-heading? node)
-                    {:sections (cond-> sections current (conj current))
-                     :current {:heading node :body []}}
-                    (if current
-                      {:sections sections
-                       :current (update current :body conj node)}
-                      {:sections sections
-                       :current nil})))
-                {:sections [] :current nil}
-                nodes)]
-    (cond-> sections current (conj current))))
+  (cond
+    level-range
+    (let [[lo hi] level-range
+          in-range? (fn [node]
+                      (and (= :heading (:type node))
+                           (<= lo (:heading-level node) hi)))
+          heading? (fn [node] (= :heading (:type node)))
+          {:keys [sections current]}
+          (reduce
+           (fn [{:keys [sections current] :as state} node]
+             (cond
+               (and (in-range? node)
+                    (or (nil? current)
+                        (<= (:heading-level node) (:heading-level (:heading current)))))
+               {:sections (cond-> sections current (conj current))
+                :current {:heading node :body []}}
+
+               (and current
+                    (heading? node)
+                    (not (in-range? node))
+                    (<= (:heading-level node) (:heading-level (:heading current))))
+               {:sections (conj sections current)
+                :current nil}
+
+               current
+               {:sections sections
+                :current (update current :body conj node)}
+
+               :else state))
+           {:sections [] :current nil}
+           nodes)]
+      (cond-> sections current (conj current)))
+
+    level
+    (let [{:keys [sections current]}
+          (reduce
+           (fn [{:keys [sections current] :as state} node]
+             (if (and (= :heading (:type node))
+                      (<= (:heading-level node) level))
+               {:sections (cond-> sections current (conj current))
+                :current {:heading node :body []}}
+               (if current
+                 {:sections sections
+                  :current (update current :body conj node)}
+                 state)))
+           {:sections [] :current nil}
+           nodes)]
+      (cond-> sections current (conj current)))
+
+    :else
+    (top-level-sections nodes)))
 
 (def result-separator
   "Sentinel node interposed between results by filter functions.
@@ -311,13 +391,20 @@
          vec)
     [(vec nodes)]))
 
-(defn section-filter [{:keys [matcher] :as selector} nodes]
-  (let [sections (slice-sections selector nodes)]
+(defn section-filter [{:keys [level level-range matcher] :as selector} nodes]
+  (let [sections (if (and (nil? level) (nil? level-range) matcher)
+                   (find-sections-by-text matcher nodes)
+                   (slice-sections selector nodes))]
     (->> sections
          (filter (fn [{:keys [heading]}]
-                   (if matcher
-                     (text-matches? matcher (md/node->text heading))
-                     true)))
+                   (let [hl (:heading-level heading)]
+                     (and
+                      (if (and level (> level 1))
+                        (= hl level)
+                        true)
+                      (if matcher
+                        (text-matches? matcher (md/node->text heading))
+                        true)))))
          (map (fn [{:keys [heading body]}]
                 (cons heading body)))
          (interpose [result-separator])
