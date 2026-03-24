@@ -158,14 +158,14 @@ Add post-parse validation for selector structure.
 
 Detect end-of-input inside quotes, regex, and parenthesized URLs.
 
-- [ ] Add `col-offset` parameter to `parse-text-matcher` (or compute from `*selector-input*` and the text-matcher substring)
-- [ ] Quoted string scanning: detect missing closing quote, throw at col = end-of-input + 1
-- [ ] Regex scanning: detect missing closing `/`, throw at col = end-of-input + 1
-- [ ] Link URL: detect missing closing `)`, throw with col at end
-- [ ] Messages: "expected character in quoted string" for quotes, "expected regex character" for regex, `expected "$"` for link
-- [ ] No new lint errors
-- [ ] Unit tests pass
-- [ ] E2E: 4 new passes (target: 100/135)
+- [x] Add `col-offset` parameter to `parse-text-matcher` (or compute from `*selector-input*` and the text-matcher substring)
+- [x] Quoted string scanning: detect missing closing quote, throw at col = end-of-input + 1
+- [x] Regex scanning: detect missing closing `/`, throw at col = end-of-input + 1
+- [x] Link URL: detect missing closing `)`, throw with col at end
+- [x] Messages: "expected character in quoted string" for quotes, "expected regex character" for regex, `expected "$"` for link
+- [x] No new lint errors
+- [x] Unit tests pass
+- [x] E2E: 4 new passes (target: 100/135)
 
 **What the system can do now:** Unterminated delimiters produce clear error messages pointing to end of input.
 

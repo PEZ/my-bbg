@@ -87,61 +87,89 @@
                    (let [hex (subs match 2 (dec (count match)))]
                      (String. (Character/toChars (Integer/parseInt hex 16))))))))
 
-(defn parse-text-matcher [s]
-  (when (and s (not= s "") (not= s "*"))
-    (cond
-      ;; Regex replace: !s/pattern/replacement/
-      (str/starts-with? s "!s/")
-      (let [rest-s (subs s 3)
-            sep-idx (str/index-of rest-s "/")
-            pattern-str (subs rest-s 0 sep-idx)
-            after-sep (subs rest-s (inc sep-idx))
-            replacement (if (str/ends-with? after-sep "/")
-                          (subs after-sep 0 (dec (count after-sep)))
-                          after-sep)
-            pattern (re-pattern pattern-str)]
-        {:match-fn (fn [text] (re-find pattern text))
-         :replace {:pattern pattern
-                   :replacement replacement}})
+(defn parse-text-matcher
+  ([s]
+   (parse-text-matcher s 1))
+  ([s start-col]
+   (when (and s (not= s "") (not= s "*"))
+     (letfn [(validate-unclosed! [matcher]
+               (let [anchored-start (str/starts-with? matcher "^")
+                     anchored-end (str/ends-with? matcher "$")
+                     without-start (if anchored-start
+                                     (subs matcher 1)
+                                     matcher)
+                     candidate (if anchored-end
+                                 (subs without-start 0 (dec (count without-start)))
+                                 without-start)
+                     candidate-col (+ start-col (if anchored-start 1 0))
+                     candidate-first (first candidate)]
+                 (cond
+                   (and (seq candidate)
+                        (or (= \" candidate-first)
+                            (= \' candidate-first))
+                        (not= (last candidate) candidate-first))
+                   (throw-parse-error (+ candidate-col (count candidate))
+                                      "expected character in quoted string")
 
-      ;; Regex: /pattern/
-      (and (str/starts-with? s "/") (str/ends-with? s "/"))
-      (let [pattern (re-pattern (subs s 1 (dec (count s))))]
-        (fn [text] (some? (re-find pattern text))))
+                   (and (str/starts-with? candidate "/")
+                        (not (str/ends-with? candidate "/")))
+                   (throw-parse-error (+ candidate-col (count candidate))
+                                      "expected regex character"))))]
+       (validate-unclosed! s)
+       (cond
+         ;; Regex replace: !s/pattern/replacement/
+         (str/starts-with? s "!s/")
+         (let [rest-s (subs s 3)
+               sep-idx (str/index-of rest-s "/")
+               pattern-str (subs rest-s 0 sep-idx)
+               after-sep (subs rest-s (inc sep-idx))
+               replacement (if (str/ends-with? after-sep "/")
+                             (subs after-sep 0 (dec (count after-sep)))
+                             after-sep)
+               pattern (re-pattern pattern-str)]
+           {:match-fn (fn [text] (re-find pattern text))
+            :replace {:pattern pattern
+                      :replacement replacement}})
 
-      ;; All other cases: strip anchors first, then detect quoting
-      :else
-      (let [anchored-start (str/starts-with? s "^")
-            anchored-end (str/ends-with? s "$")
-            s1 (cond-> s
-                 anchored-start (subs 1)
-                 anchored-end (subs 0 (- (count (cond-> s anchored-start (subs 1))) 1)))
-            s1 (str/trim s1)
-            quote-char (when (>= (count s1) 2)
-                         (let [fc (first s1)]
-                           (when (and (contains? #{\' \"} fc)
-                                      (= fc (last s1)))
-                             fc)))
-            quoted? (some? quote-char)
-            inner (if quoted?
-                    (process-escape-sequences (subs s1 1 (dec (count s1))))
-                    s1)]
-        (when (and (not quoted?) (str/starts-with? inner "<"))
-          (throw (ex-info (str "Invalid text matcher: " s) {:matcher s})))
-        (if quoted?
-          ;; Quoted: case-sensitive
-          (cond
-            (and anchored-start anchored-end) (fn [s] (= s inner))
-            anchored-start (fn [s] (str/starts-with? s inner))
-            anchored-end (fn [s] (str/ends-with? s inner))
-            :else (fn [s] (str/includes? s inner)))
-          ;; Unquoted: case-insensitive
-          (let [text-lower (str/lower-case inner)]
-            (cond
-              (and anchored-start anchored-end) (fn [s] (= (str/lower-case s) text-lower))
-              anchored-start (fn [s] (str/starts-with? (str/lower-case s) text-lower))
-              anchored-end (fn [s] (str/ends-with? (str/lower-case s) text-lower))
-              :else (fn [s] (str/includes? (str/lower-case s) text-lower)))))))))
+         ;; Regex: /pattern/
+         (and (str/starts-with? s "/") (str/ends-with? s "/"))
+         (let [pattern (re-pattern (subs s 1 (dec (count s))))]
+           (fn [text] (some? (re-find pattern text))))
+
+         ;; All other cases: strip anchors first, then detect quoting
+         :else
+         (let [anchored-start (str/starts-with? s "^")
+               anchored-end (str/ends-with? s "$")
+               s1 (cond-> s
+                    anchored-start (subs 1)
+                    anchored-end (subs 0 (- (count (cond-> s anchored-start (subs 1))) 1)))
+               s1 (str/trim s1)
+               quote-char (when (>= (count s1) 2)
+                            (let [fc (first s1)]
+                              (when (and (or (= \" fc)
+                                             (= \' fc))
+                                         (= fc (last s1)))
+                                fc)))
+               quoted? (some? quote-char)
+               inner (if quoted?
+                       (process-escape-sequences (subs s1 1 (dec (count s1))))
+                       s1)]
+           (when (and (not quoted?) (str/starts-with? inner "<"))
+             (throw (ex-info (str "Invalid text matcher: " s) {:matcher s})))
+           (if quoted?
+             ;; Quoted: case-sensitive
+             (cond
+               (and anchored-start anchored-end) (fn [s] (= s inner))
+               anchored-start (fn [s] (str/starts-with? s inner))
+               anchored-end (fn [s] (str/ends-with? s inner))
+               :else (fn [s] (str/includes? s inner)))
+             ;; Unquoted: case-insensitive
+             (let [text-lower (str/lower-case inner)]
+               (cond
+                 (and anchored-start anchored-end) (fn [s] (= (str/lower-case s) text-lower))
+                 anchored-start (fn [s] (str/starts-with? (str/lower-case s) text-lower))
+                 anchored-end (fn [s] (str/ends-with? (str/lower-case s) text-lower))
+                 :else (fn [s] (str/includes? (str/lower-case s) text-lower)))))))))))
 
 (defn text-matches? [matcher text]
   (if (map? matcher)
@@ -184,10 +212,11 @@
                               (and lo hi) [lo hi]
                               (and lo has-comma (not hi)) [lo 6]
                               (and (not lo) has-comma hi) [1 hi])
+                text-col (+ (count s) 1 (- (count rest-text)))
                 text (str/trim rest-text)]
             {:type :section
              :level-range level-range
-             :matcher (parse-text-matcher text)})
+             :matcher (parse-text-matcher text text-col)})
           (let [hashes (re-find #"^#+" s)
                 level (count hashes)
                 next-char (nth s level nil)]
@@ -203,29 +232,32 @@
                                    "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
               {:type :section
                :level (when (> level 1) level)
-               :matcher (parse-text-matcher text)}))))
+               :matcher (parse-text-matcher text text-col)}))))
 
       ;; Task: - [ ] unchecked, - [x] checked, - [?] any task
       (str/starts-with? s "- [")
       (let [marker-end (str/index-of s "]")
             marker (when marker-end (subs s 2 (inc marker-end)))]
         (if (contains? #{"[x]" "[ ]" "[?]"} marker)
-          (let [task-kind (case marker
+          (let [text-col (matcher-start-col (+ 2 (count marker)) s)
+                text (str/trim (subs s (+ 2 (count marker))))
+                task-kind (case marker
                             "[x]" :checked
                             "[ ]" :unchecked
-                            "[?]" :any)
-                text (str/trim (subs s (+ 2 (count marker))))]
+                            "[?]" :any)]
             {:type :task
              :task-kind task-kind
-             :matcher (parse-text-matcher text)})
+             :matcher (parse-text-matcher text text-col)})
           (throw-parse-error 4 "expected \"[x]\", \"[x]\", or \"[?]\"")))
 
       ;; Ordered list: 1. text (with optional task syntax)
       (str/starts-with? s "1.")
-      (let [text (str/trim (str/replace-first s #"^1\.\s*" ""))
+      (let [text-col (matcher-start-col 2 s)
+            text (str/trim (subs s 2))
             task-match (re-find #"^\[[ x?]\]" text)]
         (if task-match
           (let [marker (subs text 0 3)
+                rest-col (+ (dec text-col) (matcher-start-col 3 text))
                 task-kind (case marker
                             "[x]" :checked
                             "[ ]" :unchecked
@@ -234,17 +266,18 @@
             {:type :task
              :task-kind task-kind
              :list-kind :ordered
-             :matcher (parse-text-matcher rest-text)})
+             :matcher (parse-text-matcher rest-text rest-col)})
           {:type :list-item
            :list-kind :ordered
-           :matcher (parse-text-matcher text)}))
+           :matcher (parse-text-matcher text text-col)}))
 
       ;; Unordered list: - text (but not - [ ] which is handled above)
       (str/starts-with? s "- ")
-      (let [text (str/trim (subs s 2))]
+      (let [text-col (matcher-start-col 2 s)
+            text (str/trim (subs s 2))]
         {:type :list-item
          :list-kind :unordered
-         :matcher (parse-text-matcher text)})
+         :matcher (parse-text-matcher text text-col)})
 
       ;; Just "-" with no text
       (= s "-")
@@ -254,25 +287,29 @@
 
       ;; Blockquote: > text
       (str/starts-with? s ">")
-      (let [text (str/trim (subs s 1))]
+      (let [text-col (matcher-start-col 1 s)
+            text (str/trim (subs s 1))]
         {:type :blockquote
-         :matcher (parse-text-matcher text)})
+         :matcher (parse-text-matcher text text-col)})
 
       ;; Code block: ```language text
       (str/starts-with? s "```")
       (let [rest-raw (subs s 3)
             has-space (str/starts-with? rest-raw " ")
+            rest-col (matcher-start-col 3 s)
             rest-s (str/trim rest-raw)
-            [lang text] (when (seq rest-s) (str/split rest-s #"\s+" 2))]
+            [lang text] (when (seq rest-s) (str/split rest-s #"\s+" 2))
+            text-col (when (and lang text)
+                       (+ (dec rest-col) (matcher-start-col (count lang) rest-s)))]
         (if (and has-space (nil? text))
           ;; Space after ``` with single token: content matcher (not language)
           {:type :code
            :language-matcher nil
-           :matcher (parse-text-matcher lang)}
+           :matcher (parse-text-matcher lang rest-col)}
           ;; Normal: first token is language, optional second is content
           {:type :code
-           :language-matcher (parse-text-matcher lang)
-           :matcher (parse-text-matcher text)}))
+           :language-matcher (parse-text-matcher lang rest-col)
+           :matcher (parse-text-matcher text text-col)}))
 
       ;; Image: ![alt](url) — must come before link
       (str/starts-with? s "![")
@@ -280,10 +317,13 @@
             alt-text (when close-bracket (subs s 2 close-bracket))
             after (when close-bracket (subs s (+ 2 close-bracket)))
             end-paren (when after (str/last-index-of after ")"))
+            url-col (when close-bracket (+ close-bracket 3))
             url-text (when end-paren (subs after 0 end-paren))]
+        (when (and close-bracket after (nil? end-paren))
+          (throw-parse-error (inc (count s)) "expected \"$\""))
         {:type :image
-         :matcher (parse-text-matcher (some-> alt-text str/trim))
-         :url-matcher (parse-text-matcher (some-> url-text str/trim))})
+         :matcher (parse-text-matcher (some-> alt-text str/trim) 3)
+         :url-matcher (parse-text-matcher (some-> url-text str/trim) url-col)})
 
       ;; Link: [display](url)
       (str/starts-with? s "[")
@@ -291,27 +331,34 @@
             display-text (when close-bracket (subs s 1 close-bracket))
             after (when close-bracket (subs s (+ 2 close-bracket)))
             end-paren (when after (str/last-index-of after ")"))
+            url-col (when close-bracket (+ close-bracket 3))
             url-text (when end-paren (subs after 0 end-paren))]
+        (when (and close-bracket after (nil? end-paren))
+          (throw-parse-error (inc (count s)) "expected \"$\""))
         {:type :link
-         :matcher (parse-text-matcher (some-> display-text str/trim))
-         :url-matcher (parse-text-matcher (some-> url-text str/trim))})
+         :matcher (parse-text-matcher (some-> display-text str/trim) 2)
+         :url-matcher (parse-text-matcher (some-> url-text str/trim) url-col)})
 
       ;; HTML: </> tag
       (str/starts-with? s "</>")
-      (let [text (str/trim (subs s 3))]
+      (let [text-col (matcher-start-col 3 s)
+            text (str/trim (subs s 3))]
         {:type :html
-         :matcher (parse-text-matcher text)})
+         :matcher (parse-text-matcher text text-col)})
 
       ;; Paragraph: P: text
       (str/starts-with? s "P:")
-      (let [text (str/trim (subs s 2))]
+      (let [text-col (matcher-start-col 2 s)
+            text (str/trim (subs s 2))]
         {:type :paragraph
-         :matcher (parse-text-matcher text)})
+         :matcher (parse-text-matcher text text-col)})
 
       ;; Front matter: +++ or +++yaml or +++toml
       (str/starts-with? s "+++")
       (let [rest-s (subs s 3)
             [fmt-str text] (str/split rest-s #"\s+" 2)
+            text-col (when (seq text)
+                       (+ 4 (count fmt-str) (count (re-find #"^\s+" (subs rest-s (count fmt-str))))))
             format (case fmt-str
                      "yaml" :yaml
                      "toml" :toml
@@ -321,10 +368,10 @@
         (if (and (not format) (seq fmt-str))
           {:type :front-matter
            :format nil
-           :matcher (parse-text-matcher rest-s)}
+           :matcher (parse-text-matcher rest-s 4)}
           {:type :front-matter
            :format format
-           :matcher (parse-text-matcher text)}))
+           :matcher (parse-text-matcher text text-col)}))
 
       ;; Table: :-: header :-: row
       (str/starts-with? s ":-:")
