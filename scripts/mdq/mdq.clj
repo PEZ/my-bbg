@@ -329,41 +329,46 @@
      :col-matcher (parse-text-matcher ctx col-text)
      :row-matcher (parse-text-matcher ctx row-text)}))
 
+(defn- parse-section-range-selector [ctx s range-match]
+  (let [[_ lo-str comma hi-str rest-text] range-match
+        lo (when (seq lo-str) (parse-long lo-str))
+        hi (when (seq hi-str) (parse-long hi-str))
+        has-comma (= "," comma)
+        level-range (cond
+                      (and lo (not has-comma)) [lo lo]
+                      (and lo hi) [lo hi]
+                      (and lo has-comma (not hi)) [lo 6]
+                      (and (not lo) has-comma hi) [1 hi])
+        text-col (+ (count s) 1 (- (count rest-text)))
+        text (string/trim rest-text)]
+    {:type :section
+     :level-range level-range
+     :matcher (parse-text-matcher ctx text text-col)}))
+
+(defn- parse-plain-section-selector [ctx s]
+  (let [hashes (re-find #"^#+" s)
+        level (count hashes)
+        next-char (nth s level nil)]
+    (when (and next-char
+               (not (Character/isWhitespace ^char next-char))
+               (not= next-char \{))
+      (throw-parse-error ctx
+                         (inc level)
+                         "expected end of input, space, or section options"))
+    (let [text-col (matcher-start-col level s)
+          text (string/trim (subs s level))]
+      (when (string/starts-with? text "$")
+        (throw-parse-error ctx
+                           text-col
+                           "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
+      {:type :section
+       :level (when (> level 1) level)
+       :matcher (parse-text-matcher ctx text text-col)})))
+
 (defn- parse-section-selector [ctx s]
-  (let [range-match (re-find #"^#\{(\d*)(,?)(\d*)\}(.*)" s)]
-    (if range-match
-      (let [[_ lo-str comma hi-str rest-text] range-match
-            lo (when (seq lo-str) (parse-long lo-str))
-            hi (when (seq hi-str) (parse-long hi-str))
-            has-comma (= "," comma)
-            level-range (cond
-                          (and lo (not has-comma)) [lo lo]
-                          (and lo hi) [lo hi]
-                          (and lo has-comma (not hi)) [lo 6]
-                          (and (not lo) has-comma hi) [1 hi])
-            text-col (+ (count s) 1 (- (count rest-text)))
-            text (string/trim rest-text)]
-        {:type :section
-         :level-range level-range
-         :matcher (parse-text-matcher ctx text text-col)})
-      (let [hashes (re-find #"^#+" s)
-            level (count hashes)
-            next-char (nth s level nil)]
-        (when (and next-char
-                   (not (Character/isWhitespace ^char next-char))
-                   (not= next-char \{))
-          (throw-parse-error ctx
-                             (inc level)
-                             "expected end of input, space, or section options"))
-        (let [text-col (matcher-start-col level s)
-              text (string/trim (subs s level))]
-          (when (string/starts-with? text "$")
-            (throw-parse-error ctx
-                               text-col
-                               "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
-          {:type :section
-           :level (when (> level 1) level)
-           :matcher (parse-text-matcher ctx text text-col)})))))
+  (if-let [range-match (re-find #"^#\{(\d*)(,?)(\d*)\}(.*)" s)]
+    (parse-section-range-selector ctx s range-match)
+    (parse-plain-section-selector ctx s)))
 
 (defn- parse-task-item-selector [ctx s]
   (let [marker-end (string/index-of s "]")
@@ -407,14 +412,13 @@
         rest-s (string/trim rest-raw)
         [lang text] (when (seq rest-s) (string/split rest-s #"\s+" 2))
         text-col (when (and lang text)
-                   (+ (dec rest-col) (matcher-start-col (count lang) rest-s)))]
-    (if (and has-space (nil? text))
-      {:type :code
-       :language-matcher nil
-       :matcher (parse-text-matcher ctx lang rest-col)}
-      {:type :code
-       :language-matcher (parse-text-matcher ctx lang rest-col)
-       :matcher (parse-text-matcher ctx text text-col)})))
+                   (+ (dec rest-col) (matcher-start-col (count lang) rest-s)))
+        [language-text matcher-text matcher-col] (if (and has-space (nil? text))
+                                                   [nil lang rest-col]
+                                                   [lang text text-col])]
+    {:type :code
+     :language-matcher (parse-text-matcher ctx language-text rest-col)
+     :matcher (parse-text-matcher ctx matcher-text matcher-col)}))
 
 (defn- parse-image-selector [ctx s]
   (let [close-bracket (string/index-of s "](")
@@ -442,80 +446,88 @@
      :matcher (parse-text-matcher ctx (some-> display-text string/trim) 2)
      :url-matcher (parse-text-matcher ctx (some-> url-text string/trim) url-col)}))
 
-(defn- parse-selector [ctx s]
-  (let [s (string/trim s)
-        table-parts (when (string/starts-with? s ":-:")
+(defn- invalid-selector? [s]
+  (let [table-parts (when (string/starts-with? s ":-:")
                       (string/split s #":-:" -1))
         table-col-text (some-> table-parts second string/trim)]
-    (cond
-      (or (string/starts-with? s "\"")
-          (string/starts-with? s "'")
-          (string/starts-with? s "~")
-          (and (re-find #"^\d" s)
-               (not (string/starts-with? s "1.")))
-          (and (string/starts-with? s "P")
-               (not (string/starts-with? s "P:")))
-          (and table-parts
-               (< (count table-parts) 3)
-               (= "*" table-col-text)))
-         (throw-parse-error ctx 1 "expected valid query")
+    (or (string/starts-with? s "\"")
+        (string/starts-with? s "'")
+        (string/starts-with? s "~")
+        (and (re-find #"^\d" s)
+             (not (string/starts-with? s "1.")))
+        (and (string/starts-with? s "P")
+             (not (string/starts-with? s "P:")))
+        (and table-parts
+             (< (count table-parts) 3)
+             (= "*" table-col-text)))))
 
-      (string/starts-with? s "#")
-         (parse-section-selector ctx s)
+(defn- validate-selector! [ctx s]
+  (when (invalid-selector? s)
+    (throw-parse-error ctx 1 "expected valid query")))
 
-      (string/starts-with? s "- [")
-         (parse-task-item-selector ctx s)
+(defn- parse-selector-dispatch [ctx s]
+  (cond
+    (string/starts-with? s "#")
+    (parse-section-selector ctx s)
 
-      (string/starts-with? s "1.")
-         (parse-ordered-list-selector ctx s)
+    (string/starts-with? s "- [")
+    (parse-task-item-selector ctx s)
 
-      (string/starts-with? s "- ")
-      (let [text-col (matcher-start-col 2 s)
-            text (string/trim (subs s 2))]
-        {:type :list-item
-         :list-kind :unordered
-            :matcher (parse-text-matcher ctx text text-col)})
+    (string/starts-with? s "1.")
+    (parse-ordered-list-selector ctx s)
 
-      (= s "-")
+    (string/starts-with? s "- ")
+    (let [text-col (matcher-start-col 2 s)
+          text (string/trim (subs s 2))]
       {:type :list-item
        :list-kind :unordered
-       :matcher nil}
+       :matcher (parse-text-matcher ctx text text-col)})
 
-      (string/starts-with? s ">")
-      (let [text-col (matcher-start-col 1 s)
-            text (string/trim (subs s 1))]
-        {:type :blockquote
-        :matcher (parse-text-matcher ctx text text-col)})
+    (= s "-")
+    {:type :list-item
+     :list-kind :unordered
+     :matcher nil}
 
-      (string/starts-with? s "```")
-      (parse-code-block-selector ctx s)
+    (string/starts-with? s ">")
+    (let [text-col (matcher-start-col 1 s)
+          text (string/trim (subs s 1))]
+      {:type :blockquote
+       :matcher (parse-text-matcher ctx text text-col)})
 
-      (string/starts-with? s "![")
-      (parse-image-selector ctx s)
+    (string/starts-with? s "```")
+    (parse-code-block-selector ctx s)
 
-      (string/starts-with? s "[")
-      (parse-link-selector ctx s)
+    (string/starts-with? s "![")
+    (parse-image-selector ctx s)
 
-      (string/starts-with? s "</>")
-      (let [text-col (matcher-start-col 3 s)
-            text (string/trim (subs s 3))]
-        {:type :html
-        :matcher (parse-text-matcher ctx text text-col)})
+    (string/starts-with? s "[")
+    (parse-link-selector ctx s)
 
-      (string/starts-with? s "P:")
-      (let [text-col (matcher-start-col 2 s)
-            text (string/trim (subs s 2))]
-        {:type :paragraph
-        :matcher (parse-text-matcher ctx text text-col)})
+    (string/starts-with? s "</>")
+    (let [text-col (matcher-start-col 3 s)
+          text (string/trim (subs s 3))]
+      {:type :html
+       :matcher (parse-text-matcher ctx text text-col)})
 
-      (string/starts-with? s "+++")
-      (parse-front-matter-selector ctx s)
+    (string/starts-with? s "P:")
+    (let [text-col (matcher-start-col 2 s)
+          text (string/trim (subs s 2))]
+      {:type :paragraph
+       :matcher (parse-text-matcher ctx text text-col)})
 
-      (string/starts-with? s ":-:")
-      (parse-table-selector ctx s)
+    (string/starts-with? s "+++")
+    (parse-front-matter-selector ctx s)
 
-      :else
-      (throw-parse-error ctx 1 "expected valid query"))))
+    (string/starts-with? s ":-:")
+    (parse-table-selector ctx s)
+
+    :else
+    (throw-parse-error ctx 1 "expected valid query")))
+
+(defn- parse-selector [ctx s]
+  (let [s (string/trim s)]
+    (validate-selector! ctx s)
+    (parse-selector-dispatch ctx s)))
 
 (defn- top-level-sections
   "Extract top-level sections: each heading starts a section, body extends
