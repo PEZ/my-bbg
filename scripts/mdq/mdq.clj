@@ -937,40 +937,37 @@
 
 ;; Manual arg parsing because selectors like "- foo" start with dash
 (defn parse-args [args]
-  (loop [remaining args
-         opts {}]
-    (if (empty? remaining)
-      opts
+  (loop [remaining (seq args)
+         opts {}
+         selector-parts []]
+    (if-not remaining
+      (cond-> opts
+        (seq selector-parts) (assoc :selector (str/join " " selector-parts)))
       (let [arg (first remaining)]
         (cond
           (= "--" arg)
-          (assoc opts :selector (str/join " " (rest remaining)))
+          (assoc opts :selector (str/join " " (concat selector-parts (rest remaining))))
 
           (or (= "-o" arg) (= "--output" arg))
-          (recur (drop 2 remaining) (assoc opts :output (second remaining)))
+          (recur (nnext remaining) (assoc opts :output (second remaining)) selector-parts)
 
           (or (= "-q" arg) (= "--quiet" arg))
-          (recur (rest remaining) (assoc opts :quiet true))
+          (recur (next remaining) (assoc opts :quiet true) selector-parts)
 
           (or (= "-h" arg) (= "--help" arg))
-          (recur (rest remaining) (assoc opts :help true))
+          (recur (next remaining) (assoc opts :help true) selector-parts)
 
           (= "--link-format" arg)
-          (recur (drop 2 remaining) (assoc opts :link-format (second remaining)))
+          (recur (nnext remaining) (assoc opts :link-format (second remaining)) selector-parts)
 
           (= "--link-placement" arg)
-          (recur (drop 2 remaining) (assoc opts :link-placement (second remaining)))
+          (recur (nnext remaining) (assoc opts :link-placement (second remaining)) selector-parts)
 
           (= "--cwd" arg)
-          (recur (drop 2 remaining) opts)
+          (recur (nnext remaining) opts selector-parts)
 
           :else
-          (let [selector-args (loop [r remaining, acc []]
-                                (cond
-                                  (empty? r) acc
-                                  (= "--cwd" (first r)) (recur (drop 2 r) acc)
-                                  :else (recur (rest r) (conj acc (first r)))))]
-            (assoc opts :selector (str/join " " selector-args))))))))
+          (recur (next remaining) opts (conj selector-parts arg)))))))
 
 (defn exec! [args]
   (let [opts (parse-args args)]
@@ -1001,8 +998,9 @@
               results (run-pipeline nodes selector)]
           (if (:quiet opts)
             (System/exit (if (seq results) 0 1))
-            (when (seq results)
-              (println (format-output results (assoc opts :ast ast))))))
+            (if (seq results)
+              (println (format-output results (assoc opts :ast ast)))
+              (System/exit 1))))
         (catch Exception e
           (binding [*out* *err*]
             (println (str "Error: " (ex-message e))))
