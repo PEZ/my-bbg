@@ -100,10 +100,10 @@
       (is (= "## Hello World" (mdq/emit-markdown nodes)))))
   (testing "paragraph roundtrip"
     (let [nodes (:content (md/parse "Hello **bold** and *italic*"))]
-      (is (= "Hello **bold** and *italic*" (mdq/emit-markdown nodes)))))
+      (is (= "Hello **bold** and _italic_" (mdq/emit-markdown nodes)))))
   (testing "code block roundtrip"
     (let [nodes (:content (md/parse "```clojure\n(+ 1 2)\n```"))]
-      (is (= "```clojure\n(+ 1 2)\n\n```" (mdq/emit-markdown nodes)))))
+      (is (= "```clojure\n(+ 1 2)\n```" (mdq/emit-markdown nodes)))))
   (testing "bullet list roundtrip"
     (let [nodes (:content (md/parse "- a\n- b\n- c"))]
       (is (= "- a\n- b\n- c" (mdq/emit-markdown nodes)))))
@@ -201,7 +201,7 @@
 (deftest blockquote-filter-test
   (let [nodes (:content (md/parse "> quote one\n\n> quote two\n\nNot a quote"))]
     (testing "match all blockquotes"
-      (is (= 2 (count (mdq/strip-separators (mdq/run-pipeline nodes ">")))))) 
+      (is (= 2 (count (mdq/strip-separators (mdq/run-pipeline nodes ">"))))))
     (testing "match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "> one")))))))
 

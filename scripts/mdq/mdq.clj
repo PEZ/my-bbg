@@ -493,7 +493,7 @@
     :softbreak "\n"
     :hardbreak "\n\n"
     :strong (str "**" (emit-inline-str (:content node)) "**")
-    :em (str "*" (emit-inline-str (:content node)) "*")
+    :em (str "_" (emit-inline-str (:content node)) "_")
     :strikethrough (str "~~" (emit-inline-str (:content node)) "~~")
     :link (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
             (let [{:keys [url->ref counter refs]} *emit-opts*
@@ -577,7 +577,7 @@
                     (str/join "\n  " (map emit-node (:content node))))
     :blockquote (str/join "\n" (map #(str "> " (emit-node %)) (:content node)))
     :code (str "```" (or (:language node) "") "\n"
-               (content-text node)
+               (str/trimr (content-text node))
                "\n```")
     :ruler "---"
     :html-block (content-text node)
