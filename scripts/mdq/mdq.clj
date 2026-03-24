@@ -724,13 +724,77 @@
                   :content (mapv select-cols matched-rows)}
         new-alignments (when-let [aligns (:alignments table)]
                          (mapv #(nth aligns %) col-idxs))]
-    (cond-> (assoc table :content [new-head new-body])
+    (cond-> (assoc table :content [new-head new-body] :normalized? true)
       new-alignments (assoc :alignments new-alignments))))
+
+(defn- parse-table-row-cells [line]
+  (let [trimmed (str/trim line)
+        content (cond-> trimmed
+                  (str/starts-with? trimmed "|") (subs 1))
+        content (cond-> content
+                  (str/ends-with? content "|") (subs 0 (dec (count content))))]
+    (mapv str/trim (str/split content #"\|"))))
+
+(defn normalize-table-from-raw
+  "Given a table node with :raw-table, parses raw cells and rebuilds
+   the table AST with all columns (including extra body columns)."
+  [table]
+  (if-let [raw (:raw-table table)]
+    (let [lines (str/split-lines raw)
+          all-cells (mapv parse-table-row-cells lines)
+          sep-idx (first (keep-indexed
+                          (fn [i cells]
+                            (when (every? #(re-matches #"\s*:?-+:?\s*" %) cells) i))
+                          all-cells))
+          header-cells (first all-cells)
+          body-cell-rows (if sep-idx
+                           (subvec all-cells (inc sep-idx))
+                           (subvec all-cells 1))
+          max-cols (apply max (count header-cells) (map count body-cell-rows))
+          padded-header (into (vec header-cells)
+                              (repeat (- max-cols (count header-cells)) ""))
+          padded-body (mapv (fn [row]
+                              (into (vec row)
+                                    (repeat (- max-cols (count row)) "")))
+                            body-cell-rows)
+          sep-cells (when sep-idx (nth all-cells sep-idx))
+          alignments (when sep-cells
+                       (into (mapv (fn [cell]
+                                     (let [t (str/trim cell)]
+                                       (cond
+                                         (and (str/starts-with? t ":") (str/ends-with? t ":")) "center"
+                                         (str/starts-with? t ":") "left"
+                                         (str/ends-with? t ":") "right"
+                                         :else "none")))
+                                   sep-cells)
+                             (repeat (- max-cols (count sep-cells)) "none")))
+          make-inline-cell (fn [type text]
+                             {:type type
+                              :content (if (str/blank? text)
+                                         []
+                                         (-> (md/parse text) :content first :content (or [])))})]
+      (-> table
+          (assoc :content
+                 [{:type :table-head
+                   :content [{:type :table-row
+                              :content (mapv #(make-inline-cell :table-header %) padded-header)}]}
+                  {:type :table-body
+                   :content (mapv (fn [row]
+                                    {:type :table-row
+                                     :content (mapv #(make-inline-cell :table-data %) row)})
+                                  padded-body)}])
+          (assoc :alignments alignments)
+          (assoc :normalized? true)
+          (dissoc :raw-table)))
+    table))
 
 (defn table-filter [{:keys [col-matcher row-matcher]} nodes]
   (let [tables (collect-nodes-deep #{:table} nodes)]
     (for [table tables
-          :let [head-row (-> table :content first :content first)
+          :let [table (if (:raw-table table)
+                        (normalize-table-from-raw table)
+                        table)
+                head-row (-> table :content first :content first)
                 headers (mapv #(md/node->text %) (:content head-row))
                 col-idxs (if col-matcher
                            (keep-indexed (fn [i h] (when (text-matches? col-matcher h) i)) headers)
@@ -916,6 +980,26 @@
 (defn- content-text [node]
   (str/join (keep :text (:content node))))
 
+(defn extract-raw-tables [markdown-text]
+  (let [lines (str/split-lines markdown-text)]
+    (->> (map-indexed vector lines)
+         (partition-by (fn [[_ line]] (str/starts-with? (str/trim line) "|")))
+         (filter (fn [group] (str/starts-with? (str/trim (second (first group))) "|")))
+         (mapv (fn [group] (str/join "\n" (map second group)))))))
+
+(defn attach-raw-tables [nodes raw-tables]
+  (:nodes
+   (reduce (fn [{:keys [idx nodes]} node]
+             (if (= :table (:type node))
+               {:idx (inc idx)
+                :nodes (conj nodes (if-let [raw (get raw-tables idx)]
+                                     (assoc node :raw-table raw)
+                                     node))}
+               {:idx idx
+                :nodes (conj nodes node)}))
+           {:idx 0 :nodes []}
+           nodes)))
+
 (defn emit-node [node]
   (case (:type node)
     :heading (str (apply str (repeat (:heading-level node) "#")) " "
@@ -947,37 +1031,39 @@
     :html-block (content-text node)
     :link (emit-inline (assoc node :type :link))
     :image (emit-inline (assoc node :type :image))
-    :table (let [[head body] (:content node)
-                 head-row (first (:content head))
-                 body-rows (:content body)
-                 all-rows (cons head-row body-rows)
-                 row-texts (mapv (fn [row]
-                                  (mapv (fn [cell] (emit-inline-str (:content cell)))
-                                        (:content row)))
-                                all-rows)
-                 max-cols (apply max (map count row-texts))
-                 row-texts (mapv (fn [texts]
-                                  (into texts (repeat (- max-cols (count texts)) "")))
-                                row-texts)
-                 col-widths (mapv (fn [col-idx]
-                                   (max 3 (apply max (map #(count (nth % col-idx)) row-texts))))
-                                 (range max-cols))
-                 aligns (let [a (vec (or (:alignments node) []))]
-                          (into a (repeat (- max-cols (count a)) "none")))
-                 pad-right (fn [s width]
-                             (let [pad (max 0 (- width (count s)))]
-                               (str s (apply str (repeat pad " ")))))
-                 make-sep (fn [align width]
-                            (case align
-                              "center" (str ":" (apply str (repeat width "-")) ":")
-                              "left" (str ":" (apply str (repeat (inc width) "-")))
-                              "right" (str (apply str (repeat (inc width) "-")) ":")
-                              (apply str (repeat (+ width 2) "-"))))
-                 format-row (fn [texts]
-                              (str "| " (str/join " | " (map pad-right texts col-widths)) " |"))
-                 sep-row (str "|" (str/join "|" (map make-sep aligns col-widths)) "|")]
-             (str/join "\n" (concat [(format-row (first row-texts)) sep-row]
-                                    (map format-row (rest row-texts)))))
+    :table (if (and (:raw-table node) (not (:normalized? node)))
+             (:raw-table node)
+             (let [[head body] (:content node)
+                   head-row (first (:content head))
+                   body-rows (:content body)
+                   all-rows (cons head-row body-rows)
+                   row-texts (mapv (fn [row]
+                                     (mapv (fn [cell] (emit-inline-str (:content cell)))
+                                           (:content row)))
+                                   all-rows)
+                   max-cols (apply max (map count row-texts))
+                   row-texts (mapv (fn [texts]
+                                     (into texts (repeat (- max-cols (count texts)) "")))
+                                   row-texts)
+                   col-widths (mapv (fn [col-idx]
+                                      (max 3 (apply max (map #(count (nth % col-idx)) row-texts))))
+                                    (range max-cols))
+                   aligns (let [a (vec (or (:alignments node) []))]
+                            (into a (repeat (- max-cols (count a)) "none")))
+                   pad-right (fn [s width]
+                               (let [pad (max 0 (- width (count s)))]
+                                 (str s (apply str (repeat pad " ")))))
+                   make-sep (fn [align width]
+                              (case align
+                                "center" (str ":" (apply str (repeat width "-")) ":")
+                                "left" (str ":" (apply str (repeat (inc width) "-")))
+                                "right" (str (apply str (repeat (inc width) "-")) ":")
+                                (apply str (repeat (+ width 2) "-"))))
+                   format-row (fn [texts]
+                                (str "| " (str/join " | " (map pad-right texts col-widths)) " |"))
+                   sep-row (str "|" (str/join "|" (map make-sep aligns col-widths)) "|")]
+               (str/join "\n" (concat [(format-row (first row-texts)) sep-row]
+                                      (map format-row (rest row-texts))))))
     :block-formula (str "$$\n" (emit-inline-str (:content node)) "\n$$")
     :front-matter (let [delim (if (= :toml (:format node)) "+++" "---")]
                     (str delim "\n" (:raw node) "\n" delim))
@@ -1457,40 +1543,52 @@
           (recur (next remaining) opts (conj selector-parts arg)))))))
 
 
-(defn exec! [args]
+(defn process
+  "Processes markdown input with given args. Returns a map with:
+   :output  - the formatted output string (or nil)
+   :exit    - suggested exit code (0 for success, 1 for no results)
+   :error   - error string if processing failed"
+  [input args]
   (let [opts (parse-args args)]
-    (when (:help opts)
-      (println "Usage: bbg mdq [options] '<selector>'")
-      (println)
-      (println "Options:")
-      (println "  -o, --output FORMAT       Output format: markdown (default), json, edn, plain")
-      (println "  --link-format FORMAT      Link format: reference (default), inline")
-      (println "  --link-placement PLACE    Link placement: section (default), doc")
-      (println "  -q, --quiet               Exit 0 if found, non-0 otherwise (no output)")
-      (println "  -h, --help                Show this help")
-      (System/exit 0))
-    (let [selector (:selector opts)]
-      (try
-        (let [input (slurp *in*)
-              {:keys [front-matter body]} (pre-process-front-matter input)
-              ast (md/parse body)
-              alignments (extract-table-alignments body)
-              ast-nodes (attach-table-alignments (:content ast) alignments)
-              nodes (if front-matter
-                      (into [(assoc front-matter :type :front-matter)] ast-nodes)
-                      ast-nodes)
-              results (if selector
-                        (run-pipeline nodes selector)
-                        nodes)]
-          (if (:quiet opts)
-            (System/exit (if (seq results) 0 1))
-            (if (seq results)
-              (println (format-output results (assoc opts :ast ast :raw-md input)))
-              (System/exit 1))))
-        (catch Exception e
-          (binding [*out* *err*]
+    (if (:help opts)
+      {:output (str "Usage: bbg mdq [options] '<selector>'\n\n"
+                    "Options:\n"
+                    "  -o, --output FORMAT       Output format: markdown (default), json, edn, plain\n"
+                    "  --link-format FORMAT      Link format: reference (default), inline\n"
+                    "  --link-placement PLACE    Link placement: section (default), doc\n"
+                    "  -q, --quiet               Exit 0 if found, non-0 otherwise (no output)\n"
+                    "  -h, --help                Show this help")
+       :exit 0}
+      (let [selector (:selector opts)]
+        (try
+          (let [{:keys [front-matter body]} (pre-process-front-matter input)
+                ast (md/parse body)
+                alignments (extract-table-alignments body)
+                raw-tables (extract-raw-tables body)
+                ast-nodes (-> (:content ast)
+                              (attach-table-alignments alignments)
+                              (attach-raw-tables raw-tables))
+                nodes (if front-matter
+                        (into [(assoc front-matter :type :front-matter)] ast-nodes)
+                        ast-nodes)
+                results (if selector
+                          (run-pipeline nodes selector)
+                          nodes)]
+            (if (:quiet opts)
+              {:exit (if (seq results) 0 1)}
+              (if (seq results)
+                {:output (format-output results (assoc opts :ast ast :raw-md input))
+                 :exit 0}
+                {:exit 1})))
+          (catch Exception e
             (let [error-data (ex-data e)]
-              (if (= :parse-error (:type error-data))
-                (println (format-pest-error error-data))
-                (println (str "Error: " (ex-message e))))))
-          (System/exit 1))))))
+              {:error (if (= :parse-error (:type error-data))
+                        (format-pest-error error-data)
+                        (str "Error: " (ex-message e)))
+               :exit 1})))))))
+
+(defn exec! [args]
+  (let [{:keys [output error exit]} (process (slurp *in*) args)]
+    (when output (println output))
+    (when error (binding [*out* *err*] (println error)))
+    (System/exit exit)))
