@@ -2277,13 +2277,18 @@
   [input args]
   (let [opts (parse-args args)]
     (if (:help opts)
-      {:output (str "Usage: bbg mdq [options] '<selector>'\n\n"
+      {:output (str "Usage: bbg mdq [options] '<selector>' [file ...]\n\n"
                     "Options:\n"
-                    "  -o, --output FORMAT       Output format: markdown (default), json, edn, plain\n"
-                    "  --link-format FORMAT      Link format: never-inline (default), inline, keep\n"
-                    "  --link-placement PLACE    Link placement: section (default), doc\n"
-                    "  -q, --quiet               Exit 0 if found, non-0 otherwise (no output)\n"
-                    "  -h, --help                Show this help")
+                    "  -o, --output FORMAT           Output format: markdown (default), json, edn, plain\n"
+                    "  --link-format FORMAT          Link format: never-inline (default), inline, keep, reference\n"
+                    "  --link-placement PLACE        Link placement: section (default), doc\n"
+                    "  --link-pos PLACE              Alias for --link-placement\n"
+                    "  --wrap-width COLS             Wrap output to the given column width\n"
+                    "  --renumber-footnotes BOOL     Renumber footnotes (default true; false preserves labels)\n"
+                    "  --br                          Use blank lines between plain-text blocks\n"
+                    "  --no-br                       Omit markdown result separators\n"
+                    "  -q, --quiet                   Exit 0 if found, non-0 otherwise (no output)\n"
+                    "  -h, --help                    Show this help")
        :exit 0}
       (let [selector (:selector opts)]
         (try
@@ -2325,7 +2330,11 @@
   [args {:keys [read-stdin resolve-file]}]
   (let [opts (parse-args args)
         files (:files opts)]
-    (if (seq files)
+    (cond
+      (:help opts)
+      (process "" args)
+
+      (seq files)
       (let [stdin-used? (volatile! false)
             results (reduce (fn [acc file-path]
                               (if (= "-" file-path)
@@ -2345,6 +2354,8 @@
         {:output (when (seq outputs) (string/join "\n" (map string/trimr outputs)))
          :error (when (seq errors) (string/join "\n" errors))
          :exit (if any-fail? 1 0)})
+
+      :else
       (process (read-stdin) args))))
 
 (defn ^:export exec! [args]

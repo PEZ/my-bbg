@@ -3,6 +3,7 @@
             [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.string :as string]
+            [clojure.test :refer [deftest is]]
             [e2e-specs]
             [mdq]))
 
@@ -127,3 +128,25 @@
         results (run-specs specs (select-keys opts [:subprocess]))
         {:keys [fail]} (report-results results)]
     (System/exit (if (zero? fail) 0 1))))
+
+(deftest help-output-e2e-test
+  (doseq [args [["--help"] ["-h"]]]
+    (let [{:keys [exit out err]} (run-mdq-subprocess "" args {})]
+      (is (zero? exit)
+          (str "help should exit 0 for " args))
+      (is (= "" err)
+          (str "help should not write stderr for " args))
+      (is (string/includes? out "Usage: bbg mdq")
+          (str "help should print usage for " args))
+      (doseq [flag ["--output"
+                    "--link-format"
+                    "--link-placement"
+                    "--link-pos"
+                    "--wrap-width"
+                    "--renumber-footnotes"
+                    "--br"
+                    "--no-br"
+                    "--quiet"
+                    "--help"]]
+        (is (string/includes? out flag)
+            (str "help output should mention " flag))))))

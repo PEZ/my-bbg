@@ -1005,3 +1005,35 @@
       (is (clojure.string/includes? output "[X][1]"))
       (is (clojure.string/includes? output "[Y][1]"))
       (is (= 1 (count (re-seq #"\[1\]: https://same.com" output)))))))
+
+(deftest help-input-short-circuit-test
+  (doseq [args [["--help"] ["-h"]]]
+    (let [stdin-read? (atom false)
+          result (#'mdq/process-inputs args
+                                       {:read-stdin (fn []
+                                                      (reset! stdin-read? true)
+                                                      (throw (ex-info "stdin-read" {})))
+                                        :resolve-file (fn [_] (throw (ex-info "resolve-file" {})))})]
+      (is (false? @stdin-read?)
+          (str "help should not read stdin for " args))
+      (is (= 0 (:exit result))
+          (str "help should exit 0 for " args))
+      (is (clojure.string/includes? (:output result) "Usage: bbg mdq")
+          (str "help should produce usage output for " args)))))
+
+(deftest help-text-coverage-test
+  (let [output (:output (#'mdq/process "" ["--help"]))]
+    (doseq [flag ["--output"
+                  "--link-format"
+                  "--link-placement"
+                  "--link-pos"
+                  "--wrap-width"
+                  "--renumber-footnotes"
+                  "--br"
+                  "--no-br"
+                  "--quiet"
+                  "--help"]]
+      (is (clojure.string/includes? output flag)
+          (str "help output should mention " flag)))
+    (is (not (clojure.string/includes? output "--cwd"))
+        "help output should not mention internal --cwd")))

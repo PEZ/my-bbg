@@ -34,7 +34,7 @@
                                                                        :coerce {:status :boolean
                                                                                 :version :string}}))}
 
-  mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq [options] '<selector>'. Options: --output FORMAT, --link_format FORMAT, --link-placement PLACE, --quiet, --help"
+     mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq [options] '<selector>' [file ...]. Options: --output FORMAT, --link-format FORMAT, --link-placement PLACE, --link-pos PLACE, --wrap-width COLS, --renumber-footnotes BOOL, --br, --no-br, --quiet, --help"
        :task (mdq/exec! *command-line-args*)}
 
   e2e-test {:doc "Run E2E compatibility tests against Rust mdq specs. Options: --refresh, --spec FILE, --subprocess"
