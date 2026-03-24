@@ -198,11 +198,19 @@
 
       ;; Code block: ```language text
       (str/starts-with? s "```")
-      (let [rest-s (str/trim (subs s 3))
-            [lang text] (str/split rest-s #"\s+" 2)]
-        {:type :code
-         :language-matcher (parse-text-matcher lang)
-         :matcher (parse-text-matcher text)})
+      (let [rest-raw (subs s 3)
+            has-space (str/starts-with? rest-raw " ")
+            rest-s (str/trim rest-raw)
+            [lang text] (when (seq rest-s) (str/split rest-s #"\s+" 2))]
+        (if (and has-space (nil? text))
+          ;; Space after ``` with single token: content matcher (not language)
+          {:type :code
+           :language-matcher nil
+           :matcher (parse-text-matcher lang)}
+          ;; Normal: first token is language, optional second is content
+          {:type :code
+           :language-matcher (parse-text-matcher lang)
+           :matcher (parse-text-matcher text)}))
 
       ;; Image: ![alt](url) — must come before link
       (str/starts-with? s "![")
@@ -557,20 +565,40 @@
                       {:selector selector})))))
 
 (defn apply-replacements [results selectors]
-  (let [replacements (into [] (keep #(-> % :matcher :replace)) selectors)]
-    (if (seq replacements)
-      (let [text-xf (apply comp
-                           (reverse
-                            (map (fn [{:keys [pattern replacement]}]
-                                   #(str/replace % pattern replacement))
-                                 replacements)))]
-        (walk/postwalk
-         (fn [node]
-           (if (and (map? node) (= :text (:type node)))
-             (update node :text text-xf)
-             node))
-         results))
-      results)))
+  (let [text-replacements (into [] (keep #(-> % :matcher :replace)) selectors)
+        url-replacements (into [] (keep #(-> % :url-matcher :replace)) selectors)
+        lang-replacements (into [] (keep #(-> % :language-matcher :replace)) selectors)
+        make-xf (fn [replacements]
+                  (apply comp (reverse (map (fn [{:keys [pattern replacement]}]
+                                              #(str/replace % pattern replacement))
+                                            replacements))))]
+    (cond-> results
+      (seq text-replacements)
+      (->> (walk/postwalk
+            (let [text-xf (make-xf text-replacements)]
+              (fn [node]
+                (if (and (map? node) (= :text (:type node)))
+                  (update node :text text-xf)
+                  node)))))
+
+      (seq url-replacements)
+      (->> (walk/postwalk
+            (let [url-xf (make-xf url-replacements)]
+              (fn [node]
+                (cond
+                  (and (map? node) (= :link (:type node)))
+                  (update-in node [:attrs :href] url-xf)
+                  (and (map? node) (= :image (:type node)))
+                  (update-in node [:attrs :src] url-xf)
+                  :else node)))))
+
+      (seq lang-replacements)
+      (->> (walk/postwalk
+            (let [lang-xf (make-xf lang-replacements)]
+              (fn [node]
+                (if (and (map? node) (= :code (:type node)) (:language node))
+                  (update node :language lang-xf)
+                  node))))))))
 
 (defn run-pipeline [nodes selector-str]
   (let [segments (split-pipeline selector-str)
