@@ -1,5 +1,6 @@
 (ns mdq-test
   (:require [cheshire.core :as json]
+            [clojure.edn :as edn]
             [clojure.test :refer [deftest is testing]]
             [clojure.string]
             [mdq]
@@ -378,17 +379,28 @@
         (is (clojure.string/includes? out ":items"))))))
 
 (deftest pre-process-front-matter-test
-  (testing "YAML front matter"
-    (let [result (#'mdq/pre-process-front-matter "---\ntitle: Test\n---\n# Hello")]
-      (is (= :yaml (get-in result [:front-matter :format])))
-      (is (clojure.string/includes? (:body result) "# Hello"))))
+  (testing "supported front matter delimiters share extraction behavior"
+    (doseq [[delimiter format raw]
+            [["---" :yaml "title: Test"]
+             ["+++" :toml "title = \"Test\""]]]
+      (let [input (str delimiter "\n" raw "\n" delimiter "\n# Hello")
+            result (#'mdq/pre-process-front-matter input)]
+        (is (= format (get-in result [:front-matter :format]))
+            (str "format should be " format))
+        (is (= raw (get-in result [:front-matter :raw]))
+            "front matter content should exclude delimiters")
+        (is (= "# Hello" (:body result))
+            "body should begin after the closing delimiter"))))
+  (testing "unterminated supported delimiters are a no-op"
+    (doseq [input ["---\ntitle: Test\n# Hello"
+                   "+++\ntitle = \"Test\"\n# Hello"]]
+      (let [result (#'mdq/pre-process-front-matter input)]
+        (is (nil? (:front-matter result)))
+        (is (= input (:body result))))))
   (testing "no front matter"
     (let [result (#'mdq/pre-process-front-matter "# Hello")]
       (is (nil? (:front-matter result)))
-      (is (= "# Hello" (:body result)))))
-  (testing "TOML front matter"
-    (let [result (#'mdq/pre-process-front-matter "+++\ntitle = \"Test\"\n+++\n# Hello")]
-      (is (= :toml (get-in result [:front-matter :format]))))))
+      (is (= "# Hello" (:body result))))))
 
 (deftest parse-selector-elements-test
   (testing "unordered list"
@@ -590,6 +602,41 @@
         (is (clojure.string/includes? output "Name"))
         (is (not (clojure.string/includes? output "Age")))))))
 
+
+(deftest raw-table-normalization-and-filtering-test
+  (let [raw-table {:type :table
+                   :raw-table "| Name | Score |\n|:--|--:|\n| Alice | 10 | extra |\n| Bob |"}
+        row->texts (fn [row]
+                     (mapv md/node->text (:content row)))]
+    (testing "normalize-table-from-raw pads headers, rows, and alignments"
+      (let [normalized (#'mdq/normalize-table-from-raw raw-table)]
+        (is (true? (:normalized? normalized)))
+        (is (nil? (:raw-table normalized)))
+        (is (= ["left" "right" "none"] (:alignments normalized)))
+        (is (= ["Name" "Score" ""]
+               (row->texts (get-in normalized [:content 0 :content 0]))))
+        (is (= [["Alice" "10" "extra"]
+                ["Bob" "" ""]]
+               (mapv row->texts (get-in normalized [:content 1 :content]))))))
+    (testing "table-filter retains headers while filtering rows on raw tables"
+      (let [result (#'mdq/table-filter {:row-matcher (#'mdq/parse-text-matcher {} "Bob")}
+                                       [raw-table])
+            filtered (first result)]
+        (is (= 1 (count result)))
+        (is (= ["Name" "Score" ""]
+               (row->texts (get-in filtered [:content 0 :content 0]))))
+        (is (= [["Bob" "" ""]]
+               (mapv row->texts (get-in filtered [:content 1 :content]))))))
+    (testing "table-filter narrows columns after normalization"
+      (let [result (#'mdq/table-filter {:col-matcher (#'mdq/parse-text-matcher {} "Score")
+                                        :row-matcher (#'mdq/parse-text-matcher {} "Alice")}
+                                       [raw-table])
+            filtered (first result)]
+        (is (= ["Score"]
+               (row->texts (get-in filtered [:content 0 :content 0]))))
+        (is (= [["10"]]
+               (mapv row->texts (get-in filtered [:content 1 :content]))))))))
+
 (deftest regex-replace-test
   (let [nodes (:content (md/parse "Hello world. Goodbye world."))]
     (testing "simple regex replacement"
@@ -621,6 +668,18 @@
               output (#'mdq/emit-markdown result)]
           (is (clojure.string/includes? output "bar"))
           (is (not (clojure.string/includes? output "foo"))))))))
+
+(deftest apply-replacement-cross-boundary-test
+  (testing "replacement spanning multiple inline text nodes is redistributed"
+    (let [original (first (:content (md/parse "alpha **beta** gamma")))
+          result (#'mdq/apply-replacement-cross-boundary original #"beta ga" "BG")]
+      (is (= "BG" (get-in result [:content 1 :content 0 :text])))
+      (is (= "mma" (get-in result [:content 2 :text])))
+      (is (= "alpha **BG**mma" (#'mdq/emit-markdown [result])))))
+  (testing "single text-node matches are a no-op"
+    (let [original (first (:content (md/parse "alpha beta gamma")))]
+      (is (= original
+             (#'mdq/apply-replacement-cross-boundary original #"beta" "B"))))))
 
 (deftest anchored-quoted-text-matcher-test
   (testing "anchored quoted start"
@@ -738,6 +797,20 @@
         (is (= "Title" (:title section)))
         (is (vector? (:body section)))))))
 
+(deftest nodes-items-nested-section-grouping-test
+  (let [items (#'mdq/nodes->items
+               (:content (md/parse "# A\npara\n\n## B\nsub\n\n# C\nend")))]
+    (is (= 2 (count items))))
+  (let [items (#'mdq/nodes->items
+               (:content (md/parse "# A\npara\n\n## B\nsub\n\n# C\nend")))]
+    (is (= "A" (get-in items [0 :section :title])))
+    (is (= {:paragraph "para"}
+           (get-in items [0 :section :body 0])))
+    (is (= "B" (get-in items [0 :section :body 1 :section :title])))
+    (is (= [{:paragraph "sub"}]
+           (get-in items [0 :section :body 1 :section :body])))
+    (is (= "C" (get-in items [1 :section :title])))))
+
 (deftest format-output-json-test
   (testing "JSON typed wrapper objects"
     (let [nodes (:content (md/parse "Hello **bold**"))
@@ -746,6 +819,27 @@
       (is (vector? (:items parsed)))
       (is (contains? (first (:items parsed)) :document))
       (is (contains? (first (get-in parsed [:items 0 :document])) :paragraph)))))
+
+(deftest format-structured-output-test
+  (let [nodes (:content (md/parse "# A\npara\n\n## B\nsub\n\n# C\nend"))]
+    (testing "json output without a selector wraps the document"
+      (let [parsed (json/parse-string (#'mdq/format-structured-output nodes {} :json) true)]
+        (is (contains? (first (:items parsed)) :document))
+        (is (= "A" (get-in parsed [:items 0 :document 0 :section :title])))
+        (is (= "B" (get-in parsed [:items 0 :document 0 :section :body 1 :section :title])))))
+    (testing "json output with a selector omits the document wrapper"
+      (let [selected (#'mdq/run-pipeline nodes "#")
+            parsed (json/parse-string
+                    (#'mdq/format-structured-output selected {:selector "#"} :json)
+                    true)]
+        (is (= "A" (get-in parsed [:items 0 :section :title])))
+        (is (= "C" (get-in parsed [:items 1 :section :title])))
+        (is (nil? (get-in parsed [:items 0 :document])))))
+    (testing "edn output follows the non-json path without document wrapping"
+      (let [parsed (edn/read-string (#'mdq/format-structured-output nodes {} :edn))]
+        (is (= "A" (get-in parsed [:items 0 :section :title])))
+        (is (= "C" (get-in parsed [:items 1 :section :title])))
+        (is (nil? (get-in parsed [:items 0 :document])))))))
 
 (deftest plain-text-output-test
   (testing "plain text output"
@@ -881,3 +975,33 @@
           idx-b (.indexOf output "# B")]
       (is (clojure.string/includes? output "[Link][1]"))
       (is (< idx1 idx-b)))))
+
+(deftest emit-markdown-section-placement-test
+  (testing "reference definitions are emitted after each section group"
+    (let [nodes (:content (md/parse "# A\n\n[One](https://a.com)\n\n## B\n\n[Two](https://b.com)"))
+          output (#'mdq/emit-markdown-section-placement
+                  [(vec nodes)]
+                  "\n\n"
+                  (#'mdq/make-emit-context nil
+                                           {:link-format "reference"
+                                            :link-placement "section"}
+                                           nil))
+          idx-a-ref (.indexOf output "[1]: https://a.com")
+          idx-b-heading (.indexOf output "## B")
+          idx-b-ref (.indexOf output "[2]: https://b.com")]
+      (is (clojure.string/includes? output "[One][1]"))
+      (is (clojure.string/includes? output "[Two][2]"))
+      (is (< idx-a-ref idx-b-heading))
+      (is (> idx-b-ref idx-b-heading))))
+  (testing "repeated URLs are deduplicated across sections"
+    (let [nodes (:content (md/parse "# A\n\n[X](https://same.com)\n\n# B\n\n[Y](https://same.com)"))
+          output (#'mdq/emit-markdown-section-placement
+                  [(vec nodes)]
+                  "\n\n"
+                  (#'mdq/make-emit-context nil
+                                           {:link-format "reference"
+                                            :link-placement "section"}
+                                           nil))]
+      (is (clojure.string/includes? output "[X][1]"))
+      (is (clojure.string/includes? output "[Y][1]"))
+      (is (= 1 (count (re-seq #"\[1\]: https://same.com" output)))))))
