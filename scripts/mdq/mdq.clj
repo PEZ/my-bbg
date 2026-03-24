@@ -290,6 +290,27 @@
                 nodes)]
     (cond-> sections current (conj current))))
 
+(def result-separator
+  "Sentinel node interposed between results by filter functions.
+   emit-markdown uses these to place --- separators."
+  {:type :result-separator})
+
+(defn strip-separators
+  "Remove result-separator sentinels from nodes."
+  [nodes]
+  (remove #(= :result-separator (:type %)) nodes))
+
+(defn- separate-results
+  "Partition nodes by :result-separator sentinels into groups.
+   If no separators found, all nodes form one group."
+  [nodes]
+  (if (some #(= :result-separator (:type %)) nodes)
+    (->> nodes
+         (partition-by #(= :result-separator (:type %)))
+         (remove (fn [group] (= :result-separator (:type (first group)))))
+         vec)
+    [(vec nodes)]))
+
 (defn section-filter [{:keys [matcher] :as selector} nodes]
   (let [sections (slice-sections selector nodes)]
     (->> sections
@@ -297,8 +318,10 @@
                    (if matcher
                      (text-matches? matcher (md/node->text heading))
                      true)))
-         (mapcat (fn [{:keys [heading body]}]
-                   (cons heading body))))))
+         (map (fn [{:keys [heading body]}]
+                (cons heading body)))
+         (interpose [result-separator])
+         (apply concat))))
 
 (defn walk-ast
   "Lazy depth-first pre-order traversal of AST nodes."
@@ -417,11 +440,19 @@
 (defn selector->filter-fn [selector]
   (let [selector-type (:type selector)]
     (cond
+      (= :section selector-type)
+      (fn [nodes]
+        (section-filter selector (strip-separators nodes)))
+
       (contains? simple-filter-specs selector-type)
-      (fn [nodes] (simple-filter selector nodes))
+      (fn [nodes]
+        (let [results (simple-filter selector (strip-separators nodes))]
+          (interpose result-separator results)))
 
       (contains? complex-filter-fns selector-type)
-      (fn [nodes] ((complex-filter-fns selector-type) selector nodes))
+      (fn [nodes]
+        (let [results ((complex-filter-fns selector-type) selector (strip-separators nodes))]
+          (interpose result-separator results)))
 
       :else
       (throw (ex-info (str "Unknown selector type: " selector-type)
@@ -606,7 +637,8 @@
   ([nodes] (emit-markdown nodes nil))
   ([nodes opts]
    (let [link-format (or (:link-format opts) "reference")
-         link-placement (or (:link-placement opts) "section")]
+         link-placement (or (:link-placement opts) "section")
+         groups (separate-results nodes)]
      (if (= "reference" link-format)
        (let [counter (atom 0)
              url->ref (atom {})]
@@ -614,28 +646,38 @@
            ;; Section placement: refs after each section group
            (str/join "\n\n---\n\n"
                      (mapv (fn [group]
-                             (let [refs (atom (sorted-map))]
-                               (binding [*emit-opts* {:link-format "reference"
-                                                      :refs refs
-                                                      :counter counter
-                                                      :url->ref url->ref}]
-                                 (let [body (str/join "\n\n---\n\n" (map emit-node group))
-                                       defs (format-ref-definitions @refs)]
-                                   (if (seq defs)
-                                     (str body "\n\n" defs)
-                                     body)))))
-                           (group-nodes-by-section nodes)))
+                             (let [section-groups (group-nodes-by-section (vec group))]
+                               (str/join "\n\n"
+                                         (mapv (fn [sg]
+                                                 (let [refs (atom (sorted-map))]
+                                                   (binding [*emit-opts* {:link-format "reference"
+                                                                          :refs refs
+                                                                          :counter counter
+                                                                          :url->ref url->ref}]
+                                                     (let [body (str/join "\n\n" (map emit-node sg))
+                                                           defs (format-ref-definitions @refs)]
+                                                       (if (seq defs)
+                                                         (str body "\n\n" defs)
+                                                         body)))))
+                                               section-groups))))
+                           groups))
            ;; Doc placement: all refs at end
            (let [refs (atom (sorted-map))]
              (binding [*emit-opts* {:link-format "reference"
                                     :refs refs
                                     :counter counter
                                     :url->ref url->ref}]
-               (let [body (str/join "\n\n---\n\n" (map emit-node nodes))
+               (let [body (str/join "\n\n---\n\n"
+                                    (mapv (fn [group]
+                                            (str/join "\n\n" (map emit-node group)))
+                                          groups))
                      defs (format-ref-definitions @refs)]
                  (if (seq defs) (str body "\n\n" defs) body))))))
        ;; Inline format
-       (str/join "\n\n---\n\n" (map emit-node nodes))))))
+       (str/join "\n\n---\n\n"
+                 (mapv (fn [group]
+                         (str/join "\n\n" (map emit-node group)))
+                       groups))))))
 
 (defn- emit-inline-str [content]
   (apply str (map emit-inline content)))

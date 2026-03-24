@@ -85,14 +85,14 @@
         (is (= :heading (:type (first result))))))
     (testing "filter all sections (no matcher)"
       (let [result (mdq/section-filter {:level 1 :matcher nil} nodes)]
-        (is (= 6 (count result)))))))
+        (is (= 6 (count (mdq/strip-separators result))))))))
 
 (deftest run-pipeline-test
   (let [nodes (:content (md/parse "# A\nfoo\n\n## B\nbar\n\n# C\nbaz"))]
     (testing "single selector"
-      (is (= "# A\n\n---\n\nfoo\n\n---\n\n## B\n\n---\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A")))))
+      (is (= "# A\n\nfoo\n\n## B\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A")))))
     (testing "piped selectors"
-      (is (= "## B\n\n---\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A | ## B")))))))
+      (is (= "## B\n\nbar" (mdq/emit-markdown (mdq/run-pipeline nodes "# A | ## B")))))))
 
 (deftest emit-markdown-test
   (testing "heading roundtrip"
@@ -176,10 +176,10 @@
     (testing "match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "- foo")))))
     (testing "match all"
-      (is (= 3 (count (mdq/run-pipeline nodes "-"))))))
+      (is (= 3 (count (mdq/strip-separators (mdq/run-pipeline nodes "-")))))))
   (let [nodes (:content (md/parse "1. Alpha\n2. Beta\n3. Gamma"))]
     (testing "ordered list match all"
-      (is (= 3 (count (mdq/run-pipeline nodes "1.")))))
+      (is (= 3 (count (mdq/strip-separators (mdq/run-pipeline nodes "1."))))))
     (testing "ordered list match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "1. beta")))))
     (testing "ordered list preserves numbers in output"
@@ -192,16 +192,16 @@
 (deftest task-filter-test
   (let [nodes (:content (md/parse "- [ ] todo 1\n- [x] done 1\n- [ ] todo 2"))]
     (testing "unchecked"
-      (is (= 2 (count (mdq/run-pipeline nodes "- [ ]")))))
+      (is (= 2 (count (mdq/strip-separators (mdq/run-pipeline nodes "- [ ]"))))))
     (testing "checked"
       (is (= 1 (count (mdq/run-pipeline nodes "- [x]")))))
     (testing "any"
-      (is (= 3 (count (mdq/run-pipeline nodes "- [?]")))))))
+      (is (= 3 (count (mdq/strip-separators (mdq/run-pipeline nodes "- [?]"))))))))
 
 (deftest blockquote-filter-test
   (let [nodes (:content (md/parse "> quote one\n\n> quote two\n\nNot a quote"))]
     (testing "match all blockquotes"
-      (is (= 2 (count (mdq/run-pipeline nodes ">")))))
+      (is (= 2 (count (mdq/strip-separators (mdq/run-pipeline nodes ">")))))) 
     (testing "match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "> one")))))))
 
@@ -210,14 +210,14 @@
     (testing "filter by language"
       (is (= 1 (count (mdq/run-pipeline nodes "```clojure")))))
     (testing "match all code"
-      (is (= 2 (count (mdq/run-pipeline nodes "```")))))))
+      (is (= 2 (count (mdq/strip-separators (mdq/run-pipeline nodes "```"))))))))
 
 (deftest paragraph-filter-test
   (let [nodes (:content (md/parse "Hello world.\n\nGoodbye world.\n\n# Heading"))]
     (testing "match by text"
       (is (= 1 (count (mdq/run-pipeline nodes "P: hello")))))
     (testing "match all paragraphs"
-      (is (= 2 (count (mdq/run-pipeline nodes "P:")))))))
+      (is (= 2 (count (mdq/strip-separators (mdq/run-pipeline nodes "P:"))))))))
 
 (deftest link-filter-test
   (let [nodes (:content (md/parse "[Google](https://google.com)\n\n[GitHub](https://github.com)"))]
@@ -268,7 +268,7 @@
 (deftest piped-element-selectors-test
   (let [nodes (:content (md/parse "# Setup\n- item 1\n- item 2\n\n# API\n- endpoint 1\n"))]
     (testing "section then list"
-      (is (= 2 (count (mdq/run-pipeline nodes "# Setup | -")))))))
+      (is (= 2 (count (mdq/strip-separators (mdq/run-pipeline nodes "# Setup | -"))))))))
 
 (deftest front-matter-filter-test
   (testing "filter YAML front matter"
@@ -407,7 +407,7 @@
   (testing "section level range filtering"
     (let [nodes (:content (md/parse "# H1\nA\n## H2\nB\n### H3\nC\n#### H4\nD"))]
       (is (= 2 (count (mdq/slice-sections {:level-range [2 3]} nodes))))
-      (is (= "## H2\n\n---\n\nB\n\n---\n\n### H3\n\n---\n\nC\n\n---\n\n#### H4\n\n---\n\nD"
+      (is (= "## H2\n\nB\n\n---\n\n### H3\n\nC\n\n#### H4\n\nD"
              (mdq/emit-markdown (mdq/run-pipeline nodes "#{2,3}")))))))
 
 (deftest ordered-task-selector-test
