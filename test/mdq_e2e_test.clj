@@ -2,7 +2,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
-            [clojure.string :as str]
+            [clojure.string :as string]
             [e2e-specs]
             [mdq]))
 
@@ -57,19 +57,19 @@
           exit-ok? (if expect-success (zero? exit) (not (zero? exit)))
           output-ok? (cond
                        (nil? expected-output) true
-                       output-json (= (json/parse-string (str/trimr expected-output) true)
-                                      (json/parse-string (str/trimr out) true))
-                       :else (= (str/trimr expected-output)
-                                (str/trimr out)))
+                       output-json (= (json/parse-string (string/trimr expected-output) true)
+                                      (json/parse-string (string/trimr out) true))
+                       :else (= (string/trimr expected-output)
+                                (string/trimr out)))
           err-ok? (if output-err
-                    (str/includes? err output-err)
+                    (string/includes? err output-err)
                     true)
           pass? (and exit-ok? output-ok? err-ok?)]
       (when tmp-dir (fs/delete-tree tmp-dir))
       (cond-> {:spec file :test name :status (if pass? :pass :fail)}
         (not exit-ok?) (assoc :exit-expected (if expect-success 0 "non-zero") :exit-actual exit)
-        (not output-ok?) (assoc :expected (str/trimr (or expected-output ""))
-                                :actual (str/trimr out))
+        (not output-ok?) (assoc :expected (string/trimr (or expected-output ""))
+                                :actual (string/trimr out))
         (not err-ok?) (assoc :err-expected output-err :err-actual err)))))
 
 (defn- run-specs

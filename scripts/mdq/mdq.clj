@@ -2,7 +2,7 @@
   (:require [cheshire.core :as json]
             [clojure.pprint :as pp]
             [clojure.set :as set]
-            [clojure.string :as str]
+            [clojure.string :as string]
             [clojure.walk :as walk]
             [nextjournal.markdown :as md]))
 
@@ -47,9 +47,9 @@
 
 (defn split-pipeline [s]
   (letfn [(segment-entry [segment-text start-offset]
-            (let [trimmed (str/trim segment-text)
+            (let [trimmed (string/trim segment-text)
                   left-trim (- (count segment-text)
-                               (count (str/triml segment-text)))]
+                               (count (string/triml segment-text)))]
               {:text trimmed
                :offset (+ start-offset left-trim 1)}))]
     (loop [chars (seq s), current [], current-start 0, idx 0,
@@ -164,8 +164,8 @@
   ([s start-col]
    (when (and s (not= s "") (not= s "*"))
      (letfn [(validate-unclosed! [matcher]
-               (let [anchored-start (str/starts-with? matcher "^")
-                     anchored-end (str/ends-with? matcher "$")
+               (let [anchored-start (string/starts-with? matcher "^")
+                     anchored-end (string/ends-with? matcher "$")
                      without-start (if anchored-start
                                      (subs matcher 1)
                                      matcher)
@@ -182,8 +182,8 @@
                    (throw-parse-error (+ candidate-col (count candidate))
                                       "expected character in quoted string")
 
-                   (and (str/starts-with? candidate "/")
-                        (not (str/ends-with? candidate "/")))
+                   (and (string/starts-with? candidate "/")
+                        (not (string/ends-with? candidate "/")))
                    (throw-parse-error (+ candidate-col (count candidate))
                                       "expected regex character"))))
              (regex-parse-error-message [pattern description]
@@ -200,12 +200,12 @@
        (validate-unclosed! s)
        (cond
          ;; Regex replace: !s/pattern/replacement/
-         (str/starts-with? s "!s/")
+         (string/starts-with? s "!s/")
          (let [rest-s (subs s 3)
-               sep-idx (str/index-of rest-s "/")
+               sep-idx (string/index-of rest-s "/")
                pattern-str (subs rest-s 0 sep-idx)
                after-sep (subs rest-s (inc sep-idx))
-               replacement (if (str/ends-with? after-sep "/")
+               replacement (if (string/ends-with? after-sep "/")
                              (subs after-sep 0 (dec (count after-sep)))
                              after-sep)
                pattern (compile-regex pattern-str (+ start-col 3))]
@@ -214,19 +214,19 @@
                       :replacement replacement}})
 
          ;; Regex: /pattern/
-         (and (str/starts-with? s "/") (str/ends-with? s "/"))
+         (and (string/starts-with? s "/") (string/ends-with? s "/"))
          (let [pattern (compile-regex (subs s 1 (dec (count s)))
                                       (inc start-col))]
            (fn [text] (some? (re-find pattern text))))
 
          ;; All other cases: strip anchors first, then detect quoting
          :else
-         (let [anchored-start (str/starts-with? s "^")
-               anchored-end (str/ends-with? s "$")
+         (let [anchored-start (string/starts-with? s "^")
+               anchored-end (string/ends-with? s "$")
                s1 (cond-> s
                     anchored-start (subs 1)
                     anchored-end (subs 0 (- (count (cond-> s anchored-start (subs 1))) 1)))
-               s1 (str/trim s1)
+               s1 (string/trim s1)
                quote-char (when (>= (count s1) 2)
                             (let [fc (first s1)]
                               (when (and (or (= \" fc)
@@ -239,21 +239,21 @@
                        (process-escape-sequences (subs s1 1 (dec (count s1)))
                                                  inner-start-col)
                        s1)]
-           (when (and (not quoted?) (str/starts-with? inner "<"))
+           (when (and (not quoted?) (string/starts-with? inner "<"))
              (throw-parse-error start-col
                                 "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
            (if quoted?
              (cond
                (and anchored-start anchored-end) (fn [text] (= text inner))
-               anchored-start (fn [text] (str/starts-with? text inner))
-               anchored-end (fn [text] (str/ends-with? text inner))
-               :else (fn [text] (str/includes? text inner)))
-             (let [text-lower (str/lower-case inner)]
+               anchored-start (fn [text] (string/starts-with? text inner))
+               anchored-end (fn [text] (string/ends-with? text inner))
+               :else (fn [text] (string/includes? text inner)))
+             (let [text-lower (string/lower-case inner)]
                (cond
-                 (and anchored-start anchored-end) (fn [text] (= (str/lower-case text) text-lower))
-                 anchored-start (fn [text] (str/starts-with? (str/lower-case text) text-lower))
-                 anchored-end (fn [text] (str/ends-with? (str/lower-case text) text-lower))
-                 :else (fn [text] (str/includes? (str/lower-case text) text-lower)))))))))))
+                 (and anchored-start anchored-end) (fn [text] (= (string/lower-case text) text-lower))
+                 anchored-start (fn [text] (string/starts-with? (string/lower-case text) text-lower))
+                 anchored-end (fn [text] (string/ends-with? (string/lower-case text) text-lower))
+                 :else (fn [text] (string/includes? (string/lower-case text) text-lower)))))))))))
 
 (defn text-matches? [matcher text]
   (if (map? matcher)
@@ -262,7 +262,7 @@
 
 (defn- matcher-start-col [prefix-len selector]
   (let [raw-tail (subs selector prefix-len)
-        left-trim (- (count raw-tail) (count (str/triml raw-tail)))]
+        left-trim (- (count raw-tail) (count (string/triml raw-tail)))]
     (+ prefix-len left-trim 1)))
 
 (defn- parse-front-matter-selector [s]
@@ -271,17 +271,17 @@
     (if (or (nil? next-char)
             (Character/isWhitespace ^char next-char))
       (let [text-col (matcher-start-col 3 s)
-            text (str/trim rest-s)]
+            text (string/trim rest-s)]
         {:type :front-matter
          :format nil
          :matcher (parse-text-matcher text text-col)})
-      (let [token-end (or (str/index-of rest-s " ")
+      (let [token-end (or (string/index-of rest-s " ")
                           (count rest-s))
             fmt-str (subs rest-s 0 token-end)
             text-col (when (< token-end (count rest-s))
                        (matcher-start-col (+ 3 token-end) s))
             text (when text-col
-                   (str/trim (subs rest-s token-end)))
+                   (string/trim (subs rest-s token-end)))
             format (case fmt-str
                      "yaml" :yaml
                      "toml" :toml
@@ -296,11 +296,11 @@
                              :pointer-style :tight-range))))))
 
 (defn- parse-table-selector [s]
-  (let [parts (str/split s #":-:" -1)
-        [col-text row-text] (mapv str/trim (rest parts))
-        second-delim-col (some-> (str/index-of s ":-:" 3) inc)]
+  (let [parts (string/split s #":-:" -1)
+        [col-text row-text] (mapv string/trim (rest parts))
+        second-delim-col (some-> (string/index-of s ":-:" 3) inc)]
     (when (and second-delim-col
-               (str/blank? col-text))
+               (string/blank? col-text))
       (throw-parse-error second-delim-col
                          "table column matcher cannot empty; use an explicit \"*\""
                          :pointer-style :point))
@@ -311,24 +311,24 @@
 
 
 (defn parse-selector [s]
-  (let [s (str/trim s)
-        table-parts (when (str/starts-with? s ":-:")
-                      (str/split s #":-:" -1))
-        table-col-text (some-> table-parts second str/trim)]
+  (let [s (string/trim s)
+        table-parts (when (string/starts-with? s ":-:")
+                      (string/split s #":-:" -1))
+        table-col-text (some-> table-parts second string/trim)]
     (cond
-      (or (str/starts-with? s "\"")
-          (str/starts-with? s "'")
-          (str/starts-with? s "~")
+      (or (string/starts-with? s "\"")
+          (string/starts-with? s "'")
+          (string/starts-with? s "~")
           (and (re-find #"^\d" s)
-               (not (str/starts-with? s "1.")))
-          (and (str/starts-with? s "P")
-               (not (str/starts-with? s "P:")))
+               (not (string/starts-with? s "1.")))
+          (and (string/starts-with? s "P")
+               (not (string/starts-with? s "P:")))
           (and table-parts
                (< (count table-parts) 3)
                (= "*" table-col-text)))
       (throw-parse-error 1 "expected valid query")
 
-      (str/starts-with? s "#")
+      (string/starts-with? s "#")
       (let [range-match (re-find #"^#\{(\d*)(,?)(\d*)\}(.*)" s)]
         (if range-match
           (let [[_ lo-str comma hi-str rest-text] range-match
@@ -341,7 +341,7 @@
                               (and lo has-comma (not hi)) [lo 6]
                               (and (not lo) has-comma hi) [1 hi])
                 text-col (+ (count s) 1 (- (count rest-text)))
-                text (str/trim rest-text)]
+                text (string/trim rest-text)]
             {:type :section
              :level-range level-range
              :matcher (parse-text-matcher text text-col)})
@@ -354,20 +354,20 @@
               (throw-parse-error (inc level)
                                  "expected end of input, space, or section options"))
             (let [text-col (matcher-start-col level s)
-                  text (str/trim (subs s level))]
-              (when (str/starts-with? text "$")
+                  text (string/trim (subs s level))]
+              (when (string/starts-with? text "$")
                 (throw-parse-error text-col
                                    "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
               {:type :section
                :level (when (> level 1) level)
                :matcher (parse-text-matcher text text-col)}))))
 
-      (str/starts-with? s "- [")
-      (let [marker-end (str/index-of s "]")
+      (string/starts-with? s "- [")
+      (let [marker-end (string/index-of s "]")
             marker (when marker-end (subs s 2 (inc marker-end)))]
         (if (contains? #{"[x]" "[ ]" "[?]"} marker)
           (let [text-col (matcher-start-col (+ 2 (count marker)) s)
-                text (str/trim (subs s (+ 2 (count marker))))
+                text (string/trim (subs s (+ 2 (count marker))))
                 task-kind (case marker
                             "[x]" :checked
                             "[ ]" :unchecked
@@ -377,9 +377,9 @@
              :matcher (parse-text-matcher text text-col)})
           (throw-parse-error 4 "expected \"[x]\", \"[x]\", or \"[?]\"")))
 
-      (str/starts-with? s "1.")
+      (string/starts-with? s "1.")
       (let [text-col (matcher-start-col 2 s)
-            text (str/trim (subs s 2))
+            text (string/trim (subs s 2))
             task-match (re-find #"^\[[ x?]\]" text)]
         (if task-match
           (let [marker (subs text 0 3)
@@ -388,7 +388,7 @@
                             "[x]" :checked
                             "[ ]" :unchecked
                             "[?]" :any)
-                rest-text (str/trim (subs text 3))]
+                rest-text (string/trim (subs text 3))]
             {:type :task
              :task-kind task-kind
              :list-kind :ordered
@@ -397,9 +397,9 @@
            :list-kind :ordered
            :matcher (parse-text-matcher text text-col)}))
 
-      (str/starts-with? s "- ")
+      (string/starts-with? s "- ")
       (let [text-col (matcher-start-col 2 s)
-            text (str/trim (subs s 2))]
+            text (string/trim (subs s 2))]
         {:type :list-item
          :list-kind :unordered
          :matcher (parse-text-matcher text text-col)})
@@ -409,18 +409,18 @@
        :list-kind :unordered
        :matcher nil}
 
-      (str/starts-with? s ">")
+      (string/starts-with? s ">")
       (let [text-col (matcher-start-col 1 s)
-            text (str/trim (subs s 1))]
+            text (string/trim (subs s 1))]
         {:type :blockquote
          :matcher (parse-text-matcher text text-col)})
 
-      (str/starts-with? s "```")
+      (string/starts-with? s "```")
       (let [rest-raw (subs s 3)
-            has-space (str/starts-with? rest-raw " ")
+            has-space (string/starts-with? rest-raw " ")
             rest-col (matcher-start-col 3 s)
-            rest-s (str/trim rest-raw)
-            [lang text] (when (seq rest-s) (str/split rest-s #"\s+" 2))
+            rest-s (string/trim rest-raw)
+            [lang text] (when (seq rest-s) (string/split rest-s #"\s+" 2))
             text-col (when (and lang text)
                        (+ (dec rest-col) (matcher-start-col (count lang) rest-s)))]
         (if (and has-space (nil? text))
@@ -431,48 +431,48 @@
            :language-matcher (parse-text-matcher lang rest-col)
            :matcher (parse-text-matcher text text-col)}))
 
-      (str/starts-with? s "![")
-      (let [close-bracket (str/index-of s "](")
+      (string/starts-with? s "![")
+      (let [close-bracket (string/index-of s "](")
             alt-text (when close-bracket (subs s 2 close-bracket))
             after (when close-bracket (subs s (+ 2 close-bracket)))
-            end-paren (when after (str/last-index-of after ")"))
+            end-paren (when after (string/last-index-of after ")"))
             url-col (when close-bracket (+ close-bracket 3))
             url-text (when end-paren (subs after 0 end-paren))]
         (when (and close-bracket after (nil? end-paren))
           (throw-parse-error (inc (count s)) "expected \"$\""))
         {:type :image
-         :matcher (parse-text-matcher (some-> alt-text str/trim) 3)
-         :url-matcher (parse-text-matcher (some-> url-text str/trim) url-col)})
+         :matcher (parse-text-matcher (some-> alt-text string/trim) 3)
+         :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)})
 
-      (str/starts-with? s "[")
-      (let [close-bracket (str/index-of s "](")
+      (string/starts-with? s "[")
+      (let [close-bracket (string/index-of s "](")
             display-text (when close-bracket (subs s 1 close-bracket))
             after (when close-bracket (subs s (+ 2 close-bracket)))
-            end-paren (when after (str/last-index-of after ")"))
+            end-paren (when after (string/last-index-of after ")"))
             url-col (when close-bracket (+ close-bracket 3))
             url-text (when end-paren (subs after 0 end-paren))]
         (when (and close-bracket after (nil? end-paren))
           (throw-parse-error (inc (count s)) "expected \"$\""))
         {:type :link
-         :matcher (parse-text-matcher (some-> display-text str/trim) 2)
-         :url-matcher (parse-text-matcher (some-> url-text str/trim) url-col)})
+         :matcher (parse-text-matcher (some-> display-text string/trim) 2)
+         :url-matcher (parse-text-matcher (some-> url-text string/trim) url-col)})
 
-      (str/starts-with? s "</>")
+      (string/starts-with? s "</>")
       (let [text-col (matcher-start-col 3 s)
-            text (str/trim (subs s 3))]
+            text (string/trim (subs s 3))]
         {:type :html
          :matcher (parse-text-matcher text text-col)})
 
-      (str/starts-with? s "P:")
+      (string/starts-with? s "P:")
       (let [text-col (matcher-start-col 2 s)
-            text (str/trim (subs s 2))]
+            text (string/trim (subs s 2))]
         {:type :paragraph
          :matcher (parse-text-matcher text text-col)})
 
-      (str/starts-with? s "+++")
+      (string/starts-with? s "+++")
       (parse-front-matter-selector s)
 
-      (str/starts-with? s ":-:")
+      (string/starts-with? s ":-:")
       (parse-table-selector s)
 
       :else
@@ -685,7 +685,7 @@
                 :preds [[:matcher md/node->text]]}
    :code {:node-pred #(= :code (:type %))
           :preds [[:language-matcher #(or (:language %) "")]
-                  [:matcher #(str/join (keep :text (:content %)))]]}
+                  [:matcher #(string/join (keep :text (:content %)))]]}
    :paragraph {:node-pred #(#{:paragraph :plain} (:type %))
                :preds [[:matcher md/node->text]]}
    :link {:node-pred #(= :link (:type %))
@@ -695,7 +695,7 @@
            :preds [[:matcher md/node->text]
                    [:url-matcher #(get-in % [:attrs :src] "")]]}
    :html {:node-pred #(#{:html-block :html-inline} (:type %))
-          :preds [[:matcher #(str/join (keep :text (:content %)))]]}})
+          :preds [[:matcher #(string/join (keep :text (:content %)))]]}})
 
 (defn- simple-filter [selector nodes]
   (let [{:keys [node-pred preds]} (simple-filter-specs (:type selector))
@@ -729,19 +729,19 @@
       new-alignments (assoc :alignments new-alignments))))
 
 (defn- parse-table-row-cells [line]
-  (let [trimmed (str/trim line)
+  (let [trimmed (string/trim line)
         content (cond-> trimmed
-                  (str/starts-with? trimmed "|") (subs 1))
+                  (string/starts-with? trimmed "|") (subs 1))
         content (cond-> content
-                  (str/ends-with? content "|") (subs 0 (dec (count content))))]
-    (mapv str/trim (str/split content #"\|"))))
+                  (string/ends-with? content "|") (subs 0 (dec (count content))))]
+    (mapv string/trim (string/split content #"\|"))))
 
 (defn normalize-table-from-raw
   "Given a table node with :raw-table, parses raw cells and rebuilds
    the table AST with all columns (including extra body columns)."
   [table]
   (if-let [raw (:raw-table table)]
-    (let [lines (str/split-lines raw)
+    (let [lines (string/split-lines raw)
           all-cells (mapv parse-table-row-cells lines)
           sep-idx (first (keep-indexed
                           (fn [i cells]
@@ -761,17 +761,17 @@
           sep-cells (when sep-idx (nth all-cells sep-idx))
           alignments (when sep-cells
                        (into (mapv (fn [cell]
-                                     (let [t (str/trim cell)]
+                                     (let [t (string/trim cell)]
                                        (cond
-                                         (and (str/starts-with? t ":") (str/ends-with? t ":")) "center"
-                                         (str/starts-with? t ":") "left"
-                                         (str/ends-with? t ":") "right"
+                                         (and (string/starts-with? t ":") (string/ends-with? t ":")) "center"
+                                         (string/starts-with? t ":") "left"
+                                         (string/ends-with? t ":") "right"
                                          :else "none")))
                                    sep-cells)
                              (repeat (- max-cols (count sep-cells)) "none")))
           make-inline-cell (fn [type text]
                              {:type type
-                              :content (if (str/blank? text)
+                              :content (if (string/blank? text)
                                          []
                                          (-> (md/parse text) :content first :content (or [])))})]
       (-> table
@@ -885,7 +885,7 @@
                                       positions)]
                 (if (<= (count affected) 1)
                   node
-                  (let [repl-str (str/replace match-text pattern replacement)
+                  (let [repl-str (string/replace match-text pattern replacement)
                         new-texts (mapv (fn [pos-entry]
                                           (let [{:keys [start text]} pos-entry
                                                 first? (= pos-entry (first affected))
@@ -911,7 +911,7 @@
         lang-replacements (into [] (keep #(-> % :language-matcher :replace)) selectors)
         make-xf (fn [replacements]
                   (apply comp (reverse (map (fn [{:keys [pattern replacement]}]
-                                              #(str/replace % pattern replacement))
+                                              #(string/replace % pattern replacement))
                                             replacements))))]
     (cond-> results
       (seq text-replacements)
@@ -984,7 +984,7 @@
       (and a-num b-num) (compare a-num b-num)
       a-num -1
       b-num 1
-      :else (compare (str/lower-case (str a)) (str/lower-case (str b))))))
+      :else (compare (string/lower-case (str a)) (string/lower-case (str b))))))
 
 (defn detect-link-forms
   "Detects the original form of each link in the raw markdown.
@@ -1156,18 +1156,18 @@
       (or (:text node) ""))))
 
 (defn extract-table-alignments [markdown-text]
-  (let [lines (str/split-lines markdown-text)]
+  (let [lines (string/split-lines markdown-text)]
     (->> lines
          (filter #(re-matches #"\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*" %))
          (mapv (fn [line]
-                 (->> (str/split (str/trim line) #"\|")
-                      (remove str/blank?)
+                 (->> (string/split (string/trim line) #"\|")
+                      (remove string/blank?)
                       (mapv (fn [cell]
-                              (let [cell (str/trim cell)]
+                              (let [cell (string/trim cell)]
                                 (cond
-                                  (and (str/starts-with? cell ":") (str/ends-with? cell ":")) "center"
-                                  (str/starts-with? cell ":") "left"
-                                  (str/ends-with? cell ":") "right"
+                                  (and (string/starts-with? cell ":") (string/ends-with? cell ":")) "center"
+                                  (string/starts-with? cell ":") "left"
+                                  (string/ends-with? cell ":") "right"
                                   :else "none"))))))))))
 
 (defn attach-table-alignments [nodes alignments-seq]
@@ -1185,14 +1185,14 @@
            nodes)))
 
 (defn- content-text [node]
-  (str/join (keep :text (:content node))))
+  (string/join (keep :text (:content node))))
 
 (defn extract-raw-tables [markdown-text]
-  (let [lines (str/split-lines markdown-text)]
+  (let [lines (string/split-lines markdown-text)]
     (->> (map-indexed vector lines)
-         (partition-by (fn [[_ line]] (str/starts-with? (str/trim line) "|")))
-         (filter (fn [group] (str/starts-with? (str/trim (second (first group))) "|")))
-         (mapv (fn [group] (str/join "\n" (map second group)))))))
+         (partition-by (fn [[_ line]] (string/starts-with? (string/trim line) "|")))
+         (filter (fn [group] (string/starts-with? (string/trim (second (first group))) "|")))
+         (mapv (fn [group] (string/join "\n" (map second group)))))))
 
 (defn attach-raw-tables [nodes raw-tables]
   (:nodes
@@ -1213,9 +1213,9 @@
                   (emit-inline-str (:content node)))
     :paragraph (emit-inline-str (:content node))
     :plain (emit-inline-str (:content node))
-    :bullet-list (str/join "\n" (map emit-node (:content node)))
-    :todo-list (str/join "\n" (map emit-node (:content node)))
-    :numbered-list (str/join "\n" (map-indexed
+    :bullet-list (string/join "\n" (map emit-node (:content node)))
+    :todo-list (string/join "\n" (map emit-node (:content node)))
+    :numbered-list (string/join "\n" (map-indexed
                                    (fn [i item]
                                      (let [n (+ i (or (get-in node [:attrs :start]) 1))
                                            item-with-order (assoc-in item [:attrs :order] n)]
@@ -1225,19 +1225,19 @@
                      prefix (if order (str order ". ") "- ")
                      indent (apply str (repeat (count prefix) " "))
                      parts (map emit-node (:content node))
-                     combined (str/join "\n\n" parts)
-                     lines (str/split combined #"\n" -1)]
+                     combined (string/join "\n\n" parts)
+                     lines (string/split combined #"\n" -1)]
                  (str prefix (first lines)
                       (when (> (count lines) 1)
-                        (str "\n" (str/join "\n" (map #(if (str/blank? %) "" (str indent %)) (rest lines)))))))
+                        (str "\n" (string/join "\n" (map #(if (string/blank? %) "" (str indent %)) (rest lines)))))))
     :todo-item (let [order (get-in node [:attrs :order])
                      prefix (if order (str order ". ") "- ")]
                  (str prefix "[" (if (get-in node [:attrs :checked]) "x" " ") "] "
-                      (str/join (str "\n" (apply str (repeat (+ (count prefix) 4) " ")))
+                      (string/join (str "\n" (apply str (repeat (+ (count prefix) 4) " ")))
                                 (map emit-node (:content node)))))
-    :blockquote (str/join "\n" (map #(str "> " (emit-node %)) (:content node)))
+    :blockquote (string/join "\n" (map #(str "> " (emit-node %)) (:content node)))
     :code (str "```" (or (:language node) "") "\n"
-               (str/trimr (content-text node))
+               (string/trimr (content-text node))
                "\n```")
     :ruler "---"
     :html-block (content-text node)
@@ -1272,20 +1272,20 @@
                                 "right" (str (apply str (repeat (inc width) "-")) ":")
                                 (apply str (repeat (+ width 2) "-"))))
                    format-row (fn [texts]
-                                (str "| " (str/join " | " (map pad-right texts col-widths)) " |"))
-                   sep-row (str "|" (str/join "|" (map make-sep aligns col-widths)) "|")]
-               (str/join "\n" (concat [(format-row (first row-texts)) sep-row]
+                                (str "| " (string/join " | " (map pad-right texts col-widths)) " |"))
+                   sep-row (str "|" (string/join "|" (map make-sep aligns col-widths)) "|")]
+               (string/join "\n" (concat [(format-row (first row-texts)) sep-row]
                                       (map format-row (rest row-texts))))))
     :block-formula (str "$$\n" (emit-inline-str (:content node)) "\n$$")
     :front-matter (let [delim (if (= :toml (:format node)) "+++" "---")]
                     (str delim "\n" (:raw node) "\n" delim))
     ;; fallback
     (if-let [content (:content node)]
-      (str/join "\n" (map emit-node content))
+      (string/join "\n" (map emit-node content))
       (or (:text node) ""))))
 
 (defn- kebab->snake [k]
-  (str/replace (name k) "-" "_"))
+  (string/replace (name k) "-" "_"))
 
 (defn- items->json-data [items]
   (walk/postwalk
@@ -1310,7 +1310,7 @@
 
 (defn format-ref-definitions [refs-map]
   (when (seq refs-map)
-    (str/join "\n"
+    (string/join "\n"
               (map (fn [[n {:keys [url title title-quote]}]]
                      (if (seq title)
                        (let [q (or title-quote \")]
@@ -1325,7 +1325,7 @@
       (and a-num b-num) (compare a-num b-num)
       a-num -1
       b-num 1
-      :else (compare (str/lower-case a) (str/lower-case b)))))
+      :else (compare (string/lower-case a) (string/lower-case b)))))
 
 (defn- collect-footnote-refs
   "Collect footnote-ref labels from an AST node tree using safe manual walk.
@@ -1361,7 +1361,7 @@
 (defn format-footnote-definitions [footnote-label->num-atom footnotes-by-label renumber?]
   (when (seq @footnote-label->num-atom)
     (let [emit-fn-body (fn [fn-def]
-                         (str/join "\n\n" (map (fn [block]
+                         (string/join "\n\n" (map (fn [block]
                                                  (emit-inline-str (:content block)))
                                                (:content fn-def))))
           entries (loop [emitted-labels #{}
@@ -1382,12 +1382,12 @@
                                  (into entries new-entries))))))]
       (if renumber?
         (let [sorted (sort-by second entries)]
-          (str/join "\n"
+          (string/join "\n"
                     (map (fn [[_label num body]]
                            (str "[^" num "]: " body))
                          sorted)))
         (let [sorted (sort-by first footnote-label-comparator entries)]
-          (str/join "\n"
+          (string/join "\n"
                     (map (fn [[label _num body]]
                            (str "[^" label "]: " body))
                          sorted)))))))
@@ -1428,10 +1428,10 @@
            ;; Section placement
            (let [refs-for-fns (atom (sorted-map-by ref-key-comparator))
                  main-output
-                 (str/join group-sep
+                 (string/join group-sep
                            (mapv (fn [group]
                                    (let [section-groups (group-nodes-by-section (vec group))]
-                                     (str/join "\n\n"
+                                     (string/join "\n\n"
                                                (mapv (fn [sg]
                                                        (let [refs (atom (sorted-map-by ref-key-comparator))]
                                                          (binding [*emit-opts* {:link-format link-format
@@ -1442,7 +1442,7 @@
                                                                                 :footnote-label->num footnote-label->num
                                                                                 :footnote-counter footnote-counter
                                                                                 :renumber-footnotes renumber-footnotes}]
-                                                           (let [body (str/join "\n\n" (map emit-node sg))
+                                                           (let [body (string/join "\n\n" (map emit-node sg))
                                                                  defs (format-ref-definitions @refs)]
                                                              (if (seq defs)
                                                                (str body "\n\n" defs)
@@ -1460,7 +1460,7 @@
                (let [fn-defs (when footnotes-by-label
                                (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))
                      ref-defs-from-fns (format-ref-definitions @refs-for-fns)
-                     suffix (str/join "\n" (remove nil? [ref-defs-from-fns fn-defs]))]
+                     suffix (string/join "\n" (remove nil? [ref-defs-from-fns fn-defs]))]
                  (if (seq suffix)
                    (str main-output "\n\n" suffix)
                    main-output))))
@@ -1474,15 +1474,15 @@
                                     :footnote-label->num footnote-label->num
                                     :footnote-counter footnote-counter
                                     :renumber-footnotes renumber-footnotes}]
-               (let [body (str/join group-sep
+               (let [body (string/join group-sep
                                     (mapv (fn [group]
-                                            (str/join "\n\n" (map emit-node group)))
+                                            (string/join "\n\n" (map emit-node group)))
                                           groups))
                      fn-defs (when footnotes-by-label
                                (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))
                      ref-defs (format-ref-definitions @refs)
                      defs-sep (if (> (count groups) 1) group-sep "\n\n")
-                     suffix (str/join "\n" (remove nil? [ref-defs fn-defs]))]
+                     suffix (string/join "\n" (remove nil? [ref-defs fn-defs]))]
                  (if (seq suffix) (str body defs-sep suffix) body))))))
        ;; Inline format
        (binding [*emit-opts* {:link-format link-format
@@ -1490,9 +1490,9 @@
                               :footnote-label->num footnote-label->num
                               :footnote-counter footnote-counter
                               :renumber-footnotes renumber-footnotes}]
-         (let [main-output (str/join group-sep
+         (let [main-output (string/join group-sep
                                      (mapv (fn [group]
-                                             (str/join "\n\n" (map emit-node group)))
+                                             (string/join "\n\n" (map emit-node group)))
                                            groups))
                fn-defs (when footnotes-by-label
                          (format-footnote-definitions footnote-label->num footnotes-by-label renumber-footnotes))]
@@ -1517,7 +1517,7 @@
     :code
     (let [info (:info node)
           [lang metadata] (when (seq info)
-                            (str/split info #"\s+" 2))]
+                            (string/split info #"\s+" 2))]
       {:code-block (cond-> {:code (content-text node)
                             :type "code"}
                      (seq lang) (assoc :language lang)
@@ -1644,14 +1644,14 @@
     (map node->plain-text (:content node))
 
     :code
-    [(str/trimr (md/node->text node))]
+    [(string/trimr (md/node->text node))]
 
     :ruler []
 
     :table
     (let [rows (mapcat :content (:content node))]
       (map (fn [row]
-             (str/trim (str/join " " (map #(str/trim (md/node->text %)) (:content row)))))
+             (string/trim (string/join " " (map #(string/trim (md/node->text %)) (:content row)))))
            rows))
 
     [(node->plain-text node)]))
@@ -1710,7 +1710,7 @@
       :markdown (emit-markdown nodes opts)
       :plain (let [texts (mapcat node->plain-texts nodes)
                    sep (if (:br opts) "\n\n" "\n")]
-               (str/join sep texts))
+               (string/join sep texts))
       (let [clean-nodes (vec (remove #(= :result-separator (:type %)) nodes))
             has-selector? (some? (:selector opts))
             raw-md (:raw-md opts)
@@ -1756,7 +1756,7 @@
                     (walk/postwalk
                      (fn [x]
                        (if (and (map? x) (:code-block x))
-                         (update-in x [:code-block :code] str/trimr)
+                         (update-in x [:code-block :code] string/trimr)
                          x))
                      items)
                     items)
@@ -1777,7 +1777,7 @@
                  (with-out-str (pp/pprint result))))))))
 
 (defn pre-process-front-matter [input]
-  (let [lines (str/split-lines input)]
+  (let [lines (string/split-lines input)]
     (cond
       ;; YAML front matter
       (= "---" (first lines))
@@ -1786,8 +1786,8 @@
                          first)]
         (if end-idx
           {:front-matter {:format :yaml
-                          :raw (str/join "\n" (subvec (vec lines) 1 end-idx))}
-           :body (str/join "\n" (subvec (vec lines) (inc end-idx)))}
+                          :raw (string/join "\n" (subvec (vec lines) 1 end-idx))}
+           :body (string/join "\n" (subvec (vec lines) (inc end-idx)))}
           {:front-matter nil :body input}))
 
       ;; TOML front matter
@@ -1797,8 +1797,8 @@
                          first)]
         (if end-idx
           {:front-matter {:format :toml
-                          :raw (str/join "\n" (subvec (vec lines) 1 end-idx))}
-           :body (str/join "\n" (subvec (vec lines) (inc end-idx)))}
+                          :raw (string/join "\n" (subvec (vec lines) 1 end-idx))}
+           :body (string/join "\n" (subvec (vec lines) (inc end-idx)))}
           {:front-matter nil :body input}))
 
       :else
@@ -1832,7 +1832,7 @@
     (re-matches #"\[\d+\]:.*" line)
     {:prefix "" :continuation "" :content line :no-wrap true}
 
-    (str/starts-with? line "> ")
+    (string/starts-with? line "> ")
     {:prefix "> " :continuation "> " :content (subs line 2)}
 
     (re-matches #"^( +)- .*" line)
@@ -1843,7 +1843,7 @@
        :continuation (apply str (repeat prefix-len \space))
        :content (subs line prefix-len)})
 
-    (str/starts-with? line "- ")
+    (string/starts-with? line "- ")
     {:prefix "- " :continuation "  " :content (subs line 2)}
 
     :else
@@ -1852,7 +1852,7 @@
 (defn- wrap-line
   "Wrap a single line respecting its prefix and the given width."
   [line width]
-  (if (str/blank? line)
+  (if (string/blank? line)
     line
     (let [{:keys [prefix continuation content no-wrap]} (detect-line-prefix line)]
       (if (or no-wrap (<= (count line) width))
@@ -1860,7 +1860,7 @@
         (let [content-width (- width (count prefix))
               tokens (tokenize-for-wrap content)
               wrapped (wrap-tokens tokens content-width)]
-          (str/join "\n"
+          (string/join "\n"
                     (map-indexed (fn [i l]
                                    (str (if (zero? i) prefix continuation) l))
                                  wrapped)))))))
@@ -1868,7 +1868,7 @@
 (defn- wrap-text
   "Wrap all lines in markdown text to the given width."
   [text width]
-  (str/join "\n" (map #(wrap-line % width) (str/split text #"\n" -1))))
+  (string/join "\n" (map #(wrap-line % width) (string/split text #"\n" -1))))
 
 (defn parse-args [args]
   (loop [remaining (seq args)
@@ -1921,8 +1921,8 @@
           (= "--cwd" arg)
           (recur (nnext remaining) (assoc opts :cwd (second remaining)) selector files)
 
-          (str/starts-with? arg "--")
-          (if-let [eq-idx (str/index-of arg "=")]
+          (string/starts-with? arg "--")
+          (if-let [eq-idx (string/index-of arg "=")]
             (let [flag (subs arg 0 eq-idx)
                   value (subs arg (inc eq-idx))]
               (recur (next remaining)
@@ -1938,10 +1938,10 @@
             (recur (next remaining) opts selector files))
 
           ;; Compound short options: -oFORMAT
-          (and (str/starts-with? arg "-")
+          (and (string/starts-with? arg "-")
                (not= arg "-")
                (> (count arg) 2)
-               (not (str/starts-with? arg "--")))
+               (not (string/starts-with? arg "--")))
           (let [flag-char (subs arg 1 2)
                 value (subs arg 2)]
             (case flag-char
@@ -2029,8 +2029,8 @@
             errors (keep :error results)
             outputs (keep :output results)
             any-fail? (some #(pos? (:exit % 0)) results)]
-        {:output (when (seq outputs) (str/join "\n" (map str/trimr outputs)))
-         :error (when (seq errors) (str/join "\n" errors))
+        {:output (when (seq outputs) (string/join "\n" (map string/trimr outputs)))
+         :error (when (seq errors) (string/join "\n" errors))
          :exit (if any-fail? 1 0)})
       (process (read-stdin) args))))
 
