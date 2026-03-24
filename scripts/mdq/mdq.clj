@@ -38,37 +38,13 @@
           (recur (next chars) (conj current c) segments in-regex in-quote c))))))
 
 (defn process-escape-sequences [s]
-  (let [sb (StringBuilder.)
-        chars (vec s)
-        len (count chars)]
-    (loop [i 0]
-      (if (>= i len)
-        (.toString sb)
-        (if (and (= \\ (nth chars i)) (< (inc i) len))
-          (let [next-c (nth chars (inc i))]
-            (case next-c
-              \' (do (.append sb \') (recur (+ i 2)))
-              \" (do (.append sb \") (recur (+ i 2)))
-              \` (do (.append sb \') (recur (+ i 2)))
-              \\ (do (.append sb \\) (recur (+ i 2)))
-              \n (do (.append sb \newline) (recur (+ i 2)))
-              \r (do (.append sb \return) (recur (+ i 2)))
-              \t (do (.append sb \tab) (recur (+ i 2)))
-              \u (if (and (< (+ i 2) len) (= \{ (nth chars (+ i 2))))
-                   (let [close-idx (loop [j (+ i 3)]
-                                     (cond
-                                       (>= j len) nil
-                                       (= \} (nth chars j)) j
-                                       :else (recur (inc j))))]
-                     (if close-idx
-                       (let [hex-str (subs s (+ i 3) close-idx)
-                             code-point (Integer/parseInt hex-str 16)]
-                         (.appendCodePoint sb code-point)
-                         (recur (inc close-idx)))
-                       (do (.append sb \\) (.append sb next-c) (recur (+ i 2)))))
-                   (do (.append sb \\) (.append sb next-c) (recur (+ i 2))))
-              (do (.append sb \\) (.append sb next-c) (recur (+ i 2)))))
-          (do (.append sb (nth chars i)) (recur (inc i))))))))
+  (str/replace s #"\\([\"'`\\nrt]|u\{[0-9a-fA-F]+\})"
+               (fn [[_ match]]
+                 (case match
+                   "'" "'" "\"" "\"" "`" "'" "\\" "\\"
+                   "n" "\n" "r" "\r" "t" "\t"
+                   (let [hex (subs match 2 (dec (count match)))]
+                     (String. (Character/toChars (Integer/parseInt hex 16))))))))
 
 (defn parse-text-matcher [s]
   (when (and s (not= s "") (not= s "*"))
