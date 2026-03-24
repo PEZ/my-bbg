@@ -606,7 +606,17 @@
               (str "[" text "][" ref-num "]"))
             (str "[" (emit-inline-str (:content node)) "]("
                  (get-in node [:attrs :href]) ")"))
-    :image (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")")
+    :image (if (and *emit-opts* (= "reference" (:link-format *emit-opts*)))
+             (let [{:keys [url->ref counter refs]} *emit-opts*
+                   src (get-in node [:attrs :src])
+                   alt (emit-inline-str (:content node))
+                   ref-num (or (get @url->ref src)
+                               (let [n (swap! counter inc)]
+                                 (swap! url->ref assoc src n)
+                                 (swap! refs assoc n {:url src})
+                                 n))]
+               (str "![" alt "][" ref-num "]"))
+             (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")"))
     :monospace (str "`" (emit-inline-str (:content node)) "`")
     :formula (str "$" (emit-inline-str (:content node)) "$")
     ;; fallback — try content or text
@@ -682,8 +692,8 @@
                "\n```")
     :ruler "---"
     :html-block (content-text node)
-    :link (str "[" (emit-inline-str (:content node)) "](" (get-in node [:attrs :href]) ")")
-    :image (str "![" (emit-inline-str (:content node)) "](" (get-in node [:attrs :src]) ")")
+    :link (emit-inline (assoc node :type :link))
+    :image (emit-inline (assoc node :type :image))
     :table (let [[head body] (:content node)
                  head-row (first (:content head))
                  body-rows (:content body)
@@ -1009,6 +1019,19 @@
 
           (= "--cwd" arg)
           (recur (nnext remaining) opts selector-parts)
+
+          (str/starts-with? arg "--")
+          (if-let [eq-idx (str/index-of arg "=")]
+            (let [flag (subs arg 0 eq-idx)
+                  value (subs arg (inc eq-idx))]
+              (recur (next remaining)
+                     (case flag
+                       "--output" (assoc opts :output value)
+                       "--link-format" (assoc opts :link-format value)
+                       "--link-placement" (assoc opts :link-placement value)
+                       opts)
+                     selector-parts))
+            (recur (next remaining) opts selector-parts))
 
           :else
           (recur (next remaining) opts (conj selector-parts arg)))))))
