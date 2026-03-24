@@ -78,14 +78,74 @@
             (recur (next chars) (conj current c) current-start (inc idx)
                    segments in-regex in-quote c)))))))
 
-(defn process-escape-sequences [s]
-  (str/replace s #"\\([\"'`\\nrt]|u\{[0-9a-fA-F]+\})"
-               (fn [[_ match]]
-                 (case match
-                   "'" "'" "\"" "\"" "`" "'" "\\" "\\"
-                   "n" "\n" "r" "\r" "t" "\t"
-                   (let [hex (subs match 2 (dec (count match)))]
-                     (String. (Character/toChars (Integer/parseInt hex 16))))))))
+(defn process-escape-sequences
+  ([s]
+   (process-escape-sequences s 1))
+  ([s start-col]
+   (let [valid-escape-message "expected \", ', `, \\, n, r, or t"
+         hex-end-col (fn [hex-start-col hex]
+                       (+ hex-start-col (max 0 (- (count hex) 2))))
+         parse-unicode-escape
+         (fn [idx]
+           (let [open-brace-idx (+ idx 2)
+                 open-brace (nth s open-brace-idx nil)
+                 escaped-col (+ start-col (inc idx))]
+             (when (not= open-brace \{)
+               (throw-parse-error escaped-col valid-escape-message))
+             (let [hex-start-idx (+ idx 3)
+                   hex-start-col (+ start-col hex-start-idx)]
+               (loop [scan-idx hex-start-idx
+                      hex-chars []]
+                 (let [current (nth s scan-idx nil)]
+                   (cond
+                     (nil? current)
+                     (throw-parse-error escaped-col valid-escape-message)
+
+                     (= current \})
+                     (if (empty? hex-chars)
+                       (throw-parse-error hex-start-col "expected 1 - 6 hex characters")
+                       (let [hex (apply str hex-chars)]
+                         (if (> (count hex) 6)
+                           (throw-parse-error escaped-col valid-escape-message)
+                           (let [code-point (Integer/parseInt hex 16)]
+                             (when-not (Character/isValidCodePoint code-point)
+                               (throw-parse-error hex-start-col
+                                                  (str "invalid unicode sequence: " hex)
+                                                  :end-col (hex-end-col hex-start-col hex)))
+                             {:next-idx (inc scan-idx)
+                              :piece (String. (Character/toChars code-point))}))))
+
+                     (re-matches #"[0-9a-fA-F]" (str current))
+                     (recur (inc scan-idx) (conj hex-chars current))
+
+                     :else
+                     (throw-parse-error (if (empty? hex-chars)
+                                          hex-start-col
+                                          (+ start-col scan-idx))
+                                        "expected 1 - 6 hex characters")))))))]
+     (loop [idx 0
+            pieces []]
+       (if (>= idx (count s))
+         (apply str pieces)
+         (let [ch (nth s idx)]
+           (if (not= ch \\)
+             (recur (inc idx) (conj pieces (str ch)))
+             (let [next-idx (inc idx)
+                   escaped (nth s next-idx nil)
+                   escaped-col (+ start-col next-idx)]
+               (case escaped
+                 nil (throw-parse-error escaped-col valid-escape-message)
+                 \" (recur (+ idx 2) (conj pieces "\""))
+                 \' (recur (+ idx 2) (conj pieces "'"))
+                 \` (recur (+ idx 2) (conj pieces "`"))
+                 \\ (recur (+ idx 2) (conj pieces "\\"))
+                 \n (recur (+ idx 2) (conj pieces "\n"))
+                 \r (recur (+ idx 2) (conj pieces "\r"))
+                 \t (recur (+ idx 2) (conj pieces "\t"))
+                 \u (let [unicode-result (parse-unicode-escape idx)]
+                      (recur (:next-idx unicode-result)
+                             (conj pieces (:piece unicode-result))))
+                 (throw-parse-error escaped-col valid-escape-message))))))))))
 
 (defn parse-text-matcher
   ([s]
@@ -151,25 +211,27 @@
                                          (= fc (last s1)))
                                 fc)))
                quoted? (some? quote-char)
+               inner-start-col (+ start-col (if anchored-start 1 0) 1)
                inner (if quoted?
-                       (process-escape-sequences (subs s1 1 (dec (count s1))))
+                       (process-escape-sequences (subs s1 1 (dec (count s1)))
+                                                 inner-start-col)
                        s1)]
            (when (and (not quoted?) (str/starts-with? inner "<"))
              (throw (ex-info (str "Invalid text matcher: " s) {:matcher s})))
            (if quoted?
              ;; Quoted: case-sensitive
              (cond
-               (and anchored-start anchored-end) (fn [s] (= s inner))
-               anchored-start (fn [s] (str/starts-with? s inner))
-               anchored-end (fn [s] (str/ends-with? s inner))
-               :else (fn [s] (str/includes? s inner)))
+               (and anchored-start anchored-end) (fn [text] (= text inner))
+               anchored-start (fn [text] (str/starts-with? text inner))
+               anchored-end (fn [text] (str/ends-with? text inner))
+               :else (fn [text] (str/includes? text inner)))
              ;; Unquoted: case-insensitive
              (let [text-lower (str/lower-case inner)]
                (cond
-                 (and anchored-start anchored-end) (fn [s] (= (str/lower-case s) text-lower))
-                 anchored-start (fn [s] (str/starts-with? (str/lower-case s) text-lower))
-                 anchored-end (fn [s] (str/ends-with? (str/lower-case s) text-lower))
-                 :else (fn [s] (str/includes? (str/lower-case s) text-lower)))))))))))
+                 (and anchored-start anchored-end) (fn [text] (= (str/lower-case text) text-lower))
+                 anchored-start (fn [text] (str/starts-with? (str/lower-case text) text-lower))
+                 anchored-end (fn [text] (str/ends-with? (str/lower-case text) text-lower))
+                 :else (fn [text] (str/includes? (str/lower-case text) text-lower)))))))))))
 
 (defn text-matches? [matcher text]
   (if (map? matcher)

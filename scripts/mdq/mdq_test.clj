@@ -190,7 +190,45 @@
             (str selector " should throw ExceptionInfo"))
         (is (= expected
                (select-keys (ex-data error) [:type :col :message :input]))
-            (str selector " should report the phase-4 unclosed-delimiter parse error"))))))
+            (str selector " should report the phase-4 unclosed-delimiter parse error")))))
+  (testing "phase 5 escape-sequence validation returns precise parse errors"
+    (doseq [[selector expected]
+            [["# \"\\x\""
+              {:type :parse-error
+               :col 5
+               :message "expected \", ', `, \\, n, r, or t"
+               :input "# \"\\x\""}]
+             ["# \"\\u{snowman}\""
+              {:type :parse-error
+               :col 7
+               :message "expected 1 - 6 hex characters"
+               :input "# \"\\u{snowman}\""}]
+             ["# \"\\u{}\""
+              {:type :parse-error
+               :col 7
+               :message "expected 1 - 6 hex characters"
+               :input "# \"\\u{}\""}]
+             ["# \"\\u{1234567}\""
+              {:type :parse-error
+               :col 5
+               :message "expected \", ', `, \\, n, r, or t"
+               :input "# \"\\u{1234567}\""}]
+             ["# \"\\u{FFFFFF}\""
+              {:type :parse-error
+               :col 7
+               :end-col 11
+               :message "invalid unicode sequence: FFFFFF"
+               :input "# \"\\u{FFFFFF}\""}]]]
+      (let [error (try
+                    (binding [mdq/*selector-input* selector]
+                      (mdq/parse-selector selector))
+                    (catch clojure.lang.ExceptionInfo e
+                      e))]
+        (is (instance? clojure.lang.ExceptionInfo error)
+            (str selector " should throw ExceptionInfo"))
+        (is (= expected
+               (select-keys (ex-data error) [:type :col :end-col :message :input]))
+            (str selector " should report the phase-5 escape parse error"))))))
 
 (deftest slice-sections-test
   (let [nodes (:content (md/parse "# A\nfoo\n\n# B\nbar\n\n## C\nbaz"))]
@@ -240,6 +278,18 @@
         (is (= {:type :parse-error
                 :col 15
                 :message "expected regex character"
+                :input selector}
+               (select-keys (ex-data error) [:type :col :message :input])))))
+    (testing "phase 5 errors keep absolute columns across pipelines"
+      (let [selector "# * | # \"\\x\""
+            error (try
+                    (mdq/run-pipeline nodes selector)
+                    (catch clojure.lang.ExceptionInfo e
+                      e))]
+        (is (instance? clojure.lang.ExceptionInfo error))
+        (is (= {:type :parse-error
+                :col 11
+                :message "expected \", ', `, \\, n, r, or t"
                 :input selector}
                (select-keys (ex-data error) [:type :col :message :input])))))))
 

@@ -175,14 +175,14 @@ Detect end-of-input inside quotes, regex, and parenthesized URLs.
 
 Refactor `process-escape-sequences` for character-by-character validation with position tracking.
 
-- [ ] Add position-tracking parameter to `process-escape-sequences`
-- [ ] For each `\` escape, validate next character is one of: `"`, `'`, `` ` ``, `\`, `n`, `r`, `t`, `u` — reject unknown escapes with col at the bad char
-- [ ] For `\u{...}`: validate hex chars (0-9, a-f, A-F), count 1-6 — reject non-hex or empty with col inside braces
-- [ ] For `\u{1234567}` (>6 hex chars): Pest backtracks and rejects `\u` as bad escape — replicate by checking `\u` only valid when followed by `{` with 1-6 hex + `}`
-- [ ] For valid hex but invalid Unicode codepoint (e.g., FFFFFF): range-check the parsed value, throw with col range spanning the hex digits
-- [ ] No new lint errors
-- [ ] Unit tests pass
-- [ ] E2E: 5 new passes (target: 105/135)
+- [x] Add position-tracking parameter to `process-escape-sequences`
+- [x] For each `\` escape, validate next character is one of: `"`, `'`, `` ` ``, `\`, `n`, `r`, `t`, `u` — reject unknown escapes with col at the bad char
+- [x] For `\u{...}`: validate hex chars (0-9, a-f, A-F), count 1-6 — reject non-hex or empty with col inside braces
+- [x] For `\u{1234567}` (>6 hex chars): Pest backtracks and rejects `\u` as bad escape — replicate by checking `\u` only valid when followed by `{` with 1-6 hex + `}`
+- [x] For valid hex but invalid Unicode codepoint (e.g., FFFFFF): range-check the parsed value, throw with col range spanning the hex digits
+- [x] No new lint errors
+- [x] Unit tests pass
+- [x] E2E: 5 new passes (target: 105/135)
 
 **What the system can do now:** All escape sequence errors produce precise pest-style messages with correct columns.
 
