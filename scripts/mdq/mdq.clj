@@ -2358,6 +2358,19 @@
       :else
       (process (read-stdin) args))))
 
+(def ^:export cli-spec
+  "CLI spec for shell completions. mdq uses custom arg parsing."
+  {:coerce {:output :string
+            :link-format :string
+            :link-placement :string
+            :link-pos :string
+            :renumber-footnotes :boolean
+            :wrap-width :int
+            :quiet :boolean
+            :br :boolean
+            :no-br :boolean
+            :help :boolean}})
+
 (defn ^:export exec! [args]
   (let [opts (parse-args args)
         cwd (:cwd opts)

@@ -4,7 +4,7 @@ _bbg() {
         compadd -a tasks
     else
         local task="${words[2]}"
-        local opts=(`bbg tasks | grep "^${task} " | grep -oE '\-\-[a-z-]+'`)
+        local opts=(`bbg -task-options "$task"`)
         if (( ${#opts} )); then
             compadd -a opts
         fi

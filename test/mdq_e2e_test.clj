@@ -116,6 +116,11 @@
                   (count results) " total"))
     {:pass pass :fail fail :skipped skipped :total (count results)}))
 
+(def ^:export cli-spec
+  {:coerce {:refresh :boolean
+            :spec :string
+            :subprocess :boolean}})
+
 (defn run-e2e!
   "Run E2E tests.
    Options: :refresh (re-download upstream cached specs), :spec (single spec file), :subprocess (use subprocess)."
@@ -127,4 +132,4 @@
                         " test cases..."))
         results (run-specs specs (select-keys opts [:subprocess]))
         {:keys [fail]} (report-results results)]
-  (System/exit (if (zero? fail) 0 1))))
+    (System/exit (if (zero? fail) 0 1))))

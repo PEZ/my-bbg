@@ -61,6 +61,10 @@
     (doseq [s statuses]
       (println (format (str "%-" max-len "s  %s") (:dir s) (status-label s))))))
 
+(def ^:export cli-spec
+  {:coerce {:status :boolean
+            :save :boolean}})
+
 (defn exec! [{:keys [status save]}]
   (cond
     status (status!)

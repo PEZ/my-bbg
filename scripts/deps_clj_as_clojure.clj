@@ -120,6 +120,13 @@
                     (str (version-str (version-at system-clojure) latest-clj) ", " system-clojure)
                     "not found")))))
 
+(def ^:export cli-spec
+  {:coerce {:status :boolean
+            :update :boolean
+            :update-deps-clj :boolean
+            :use-deps-clj :boolean
+            :use-clojure :boolean}})
+
 (defn exec! [{:keys [status update update-deps-clj use-deps-clj use-clojure]}]
   (cond
     status          (status!)

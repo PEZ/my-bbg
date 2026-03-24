@@ -16,40 +16,32 @@
   loc {:doc "Count lines of code (excludes generated files, markdown, vendor)"
        :task (loc/count! {:cwd cwd})}
 
-  clj {:doc "Manage clojure installs. Options: --status, --update, --update-deps-clj, --use-deps-clj, --use-clojure"
+  clj {:doc "Manage clojure installs"
        :task (deps-clj-as-clojure/exec! (cli/parse-opts *command-line-args*
-                                                        {:coerce {:status :boolean
-                                                                  :update :boolean
-                                                                  :update-deps-clj :boolean
-                                                                  :use-deps-clj :boolean
-                                                                  :use-clojure :boolean}}))}
+                                                        deps-clj-as-clojure/cli-spec))}
 
-  config {:doc "Manage config repos. Options: --status, --save"
+  config {:doc "Manage config repos"
           :task (config-save/exec! (cli/parse-opts *command-line-args*
-                                                   {:coerce {:status :boolean
-                                                             :save :boolean}}))}
+                                                   config-save/cli-spec))}
 
-  java {:doc "Manage Java versions. Options: --status, --version <major|latest>"
-        :task (java-version/exec! (cli/parse-opts *command-line-args* {:args->opts [:version]
-                                                                       :coerce {:status :boolean
-                                                                                :version :string}}))}
+  java {:doc "Manage Java versions"
+        :task (java-version/exec! (cli/parse-opts *command-line-args*
+                                                  java-version/cli-spec))}
 
-     mdq {:doc "Query Markdown (jq for Markdown). Usage: bbg mdq [options] '<selector>' [file ...]. Options: --output FORMAT, --link-format FORMAT, --link-placement PLACE, --link-pos PLACE, --wrap-width COLS, --renumber-footnotes BOOL, --br, --no-br, --quiet, --help"
+  mdq {:doc "Query Markdown (jq for Markdown)"
        :task (mdq/exec! *command-line-args*)}
 
-  e2e-test {:doc "Run E2E compatibility tests against Rust mdq specs. Options: --refresh, --spec FILE, --subprocess"
+  e2e-test {:doc "Run E2E compatibility tests against Rust mdq specs"
             :task (mdq-e2e-test/run-e2e!
                    (cli/parse-opts *command-line-args*
-                                   {:coerce {:refresh :boolean
-                                             :spec :string
-                                             :subprocess :boolean}}))}
+                                   mdq-e2e-test/cli-spec))}
 
   test {:doc "Run tests"
         :task (do (require 'mdq-test :reload)
                   (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test)]
                     (System/exit (if (zero? (+ fail error)) 0 1))))}
 
-  nrepl {:doc "Start nREPL server and write port to .nrepl-port. Options: --port PORT (default 1667)"
+  nrepl {:doc "Start nREPL server and write port to .nrepl-port"
          :requires ([babashka.fs :as fs]
                     [babashka.nrepl.server :as srv])
          :task (let [port (or (:port (cli/parse-opts *command-line-args* {:coerce {:port :int}})) 1667)]
@@ -63,10 +55,20 @@
 
   watch-test {:doc "Watch scripts/ and test/ and re-run unit tests on changes"
               :task (watch/watch! "Unit Tests" "bb test"
-                                 ["scripts" "test"]
-                                 {:extensions [".clj"]})}
+                                  ["scripts" "test"]
+                                  {:extensions [".clj"]})}
+
+  -task-options {:task (let [task-specs {"clj"      deps-clj-as-clojure/cli-spec
+                                         "config"   config-save/cli-spec
+                                         "java"     java-version/cli-spec
+                                         "mdq"      mdq/cli-spec
+                                         "e2e-test" mdq-e2e-test/cli-spec
+                                         "nrepl"    {:coerce {:port :int}}}]
+                         (doseq [opt (-> (get task-specs (first *command-line-args*))
+                                         :coerce keys)]
+                           (println (str "--" (name opt)))))}
 
   watch-e2e {:doc "Watch scripts/, test/, and test specs, re-run E2E tests on changes"
              :task (watch/watch! "E2E Tests" "bb e2e-test"
-                                ["scripts" "test" "dev/test-specs"]
-                                {:extensions [".clj" ".toml"]})}}}
+                                 ["scripts" "test" "dev/test-specs"]
+                                 {:extensions [".clj" ".toml"]})}}}

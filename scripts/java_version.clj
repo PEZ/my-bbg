@@ -122,6 +122,11 @@
                 (System/exit 1)))))))
 
 
+(def ^:export cli-spec
+  {:coerce {:status :boolean
+            :version :string}
+   :args->opts [:version]})
+
 (defn exec! [{:keys [status version] :as opts}]
   (when-not (fs/exists? sdkman-java-dir)
     (println "✗ SDKMAN not found at" sdkman-java-dir)
