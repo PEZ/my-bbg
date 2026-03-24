@@ -986,6 +986,59 @@
       (walk content []))
     @result))
 
+
+
+(defn- inline-text-positions [entries]
+  (loop [remaining entries
+         pos 0
+         positions []]
+    (if-let [{:keys [text path]} (first remaining)]
+      (recur (rest remaining)
+             (+ pos (count text))
+             (conj positions {:path path
+                              :start pos
+                              :end (+ pos (count text))
+                              :text text}))
+      positions)))
+
+(defn- find-affected-cross-boundary-span [pattern positions]
+  (let [concat-text (apply str (map :text positions))
+        matcher (re-matcher pattern concat-text)]
+    (when (.find matcher)
+      (let [match-start (.start matcher)
+            match-end (.end matcher)
+            affected (filterv (fn [{:keys [start end]}]
+                                (and (< start match-end) (> end match-start)))
+                              positions)]
+        {:match-start match-start
+         :match-end match-end
+         :match-text (.group matcher)
+         :affected affected}))))
+
+(defn- redistribute-replacement-text
+  [{:keys [affected match-start match-end match-text]} pattern replacement]
+  (let [replacement-text (string/replace match-text pattern replacement)]
+    (mapv (fn [{:keys [path start text] :as position}]
+            (let [first-affected? (= position (first affected))
+                  last-affected? (= position (peek affected))]
+              {:path path
+               :text (cond
+                       first-affected?
+                       (str (subs text 0 (- match-start start)) replacement-text)
+
+                       last-affected?
+                       (subs text (- match-end start))
+
+                       :else
+                       "")}))
+          affected)))
+
+(defn- apply-redistributed-inline-text [content redistributed-text]
+  (reduce (fn [tree {:keys [path text]}]
+            (assoc-in tree (conj path :text) text))
+          (vec content)
+          redistributed-text))
+
 (defn- apply-replacement-cross-boundary
   "Walk bottom-up. At each node with inline content, try to find the pattern
    in the concatenated text. If match spans multiple text nodes, redistribute."
@@ -999,86 +1052,89 @@
                                children)))
                node)]
     (if (and (map? node) (:content node))
-      (let [entries (flatten-inline-texts (:content node))
-            concat-text (apply str (map :text entries))]
-        (if (seq entries)
-          (let [m (re-matcher pattern concat-text)]
-            (if (.find m)
-              (let [match-start (.start m)
-                    match-end (.end m)
-                    match-text (.group m)
-                    positions (loop [es entries, pos 0, result []]
-                                (if (empty? es)
-                                  result
-                                  (let [{:keys [text path]} (first es)]
-                                    (recur (rest es) (+ pos (count text))
-                                           (conj result {:path path :start pos
-                                                         :end (+ pos (count text)) :text text})))))
-                    affected (filterv (fn [{:keys [start end]}]
-                                        (and (< start match-end) (> end match-start)))
-                                      positions)]
-                (if (<= (count affected) 1)
-                  node
-                  (let [repl-str (string/replace match-text pattern replacement)
-                        new-texts (mapv (fn [pos-entry]
-                                          (let [{:keys [start text]} pos-entry
-                                                first? (= pos-entry (first affected))
-                                                last? (= pos-entry (peek affected))]
-                                            (cond
-                                              first? (str (subs text 0 (- match-start start)) repl-str)
-                                              last?  (subs text (- match-end start))
-                                              :else  "")))
-                                        affected)
-                        new-content (reduce (fn [tree [pos-entry new-text]]
-                                              (assoc-in tree (conj (:path pos-entry) :text) new-text))
-                                            (vec (:content node))
-                                            (map vector affected new-texts))]
-                    (apply-replacement-cross-boundary (assoc node :content new-content) pattern replacement))))
-              node))
+      (let [positions (-> node :content flatten-inline-texts inline-text-positions)]
+        (if-let [{:keys [affected] :as span}
+                 (and (seq positions)
+                      (find-affected-cross-boundary-span pattern positions))]
+          (if (<= (count affected) 1)
+            node
+            (let [redistributed-text (redistribute-replacement-text span pattern replacement)
+                  new-content (apply-redistributed-inline-text (:content node)
+                                                               redistributed-text)]
+              (apply-replacement-cross-boundary (assoc node :content new-content)
+                                                pattern
+                                                replacement)))
           node))
       node)))
 
+(defn- selector-replacements [selectors matcher-key]
+  (into [] (keep #(-> % matcher-key :replace)) selectors))
+
+(defn- make-replacement-xf [replacements]
+  (apply comp
+         (reverse
+          (map (fn [{:keys [pattern replacement]}]
+                 #(string/replace % pattern replacement))
+               replacements))))
+
+(defn- apply-postwalk-replacements
+  [results replacements node-pred update-fn]
+  (if (seq replacements)
+    (let [value-xf (make-replacement-xf replacements)]
+      (walk/postwalk
+       (fn [node]
+         (if (and (map? node) (node-pred node))
+           (update-fn node value-xf)
+           node))
+       results))
+    results))
+
+(defn- apply-text-node-replacements [results text-replacements]
+  (apply-postwalk-replacements
+   results
+   text-replacements
+   #(= :text (:type %))
+   (fn [node text-xf]
+     (update node :text text-xf))))
+
+(defn- apply-cross-boundary-text-replacements [results text-replacements]
+  (if (seq text-replacements)
+    (mapv (fn [node]
+            (reduce (fn [current-node {:keys [pattern replacement]}]
+                      (apply-replacement-cross-boundary current-node pattern replacement))
+                    node
+                    text-replacements))
+          results)
+    results))
+
+(defn- apply-url-replacements [results url-replacements]
+  (apply-postwalk-replacements
+   results
+   url-replacements
+   #(contains? #{:link :image} (:type %))
+   (fn [node url-xf]
+     (case (:type node)
+       :link (update-in node [:attrs :href] url-xf)
+       :image (update-in node [:attrs :src] url-xf)
+       node))))
+
+(defn- apply-language-replacements [results language-replacements]
+  (apply-postwalk-replacements
+   results
+   language-replacements
+   #(and (= :code (:type %)) (:language %))
+   (fn [node language-xf]
+     (update node :language language-xf))))
+
 (defn- apply-replacements [results selectors]
-  (let [text-replacements (into [] (keep #(-> % :matcher :replace)) selectors)
-        url-replacements (into [] (keep #(-> % :url-matcher :replace)) selectors)
-        lang-replacements (into [] (keep #(-> % :language-matcher :replace)) selectors)
-        make-xf (fn [replacements]
-                  (apply comp (reverse (map (fn [{:keys [pattern replacement]}]
-                                              #(string/replace % pattern replacement))
-                                            replacements))))]
-    (cond-> results
-      (seq text-replacements)
-      (->> (walk/postwalk
-            (let [text-xf (make-xf text-replacements)]
-              (fn [node]
-                (if (and (map? node) (= :text (:type node)))
-                  (update node :text text-xf)
-                  node)))))
-
-      (seq text-replacements)
-      (->> (mapv (fn [node]
-                   (reduce (fn [n {:keys [pattern replacement]}]
-                             (apply-replacement-cross-boundary n pattern replacement))
-                           node text-replacements))))
-
-      (seq url-replacements)
-      (->> (walk/postwalk
-            (let [url-xf (make-xf url-replacements)]
-              (fn [node]
-                (cond
-                  (and (map? node) (= :link (:type node)))
-                  (update-in node [:attrs :href] url-xf)
-                  (and (map? node) (= :image (:type node)))
-                  (update-in node [:attrs :src] url-xf)
-                  :else node)))))
-
-      (seq lang-replacements)
-      (->> (walk/postwalk
-            (let [lang-xf (make-xf lang-replacements)]
-              (fn [node]
-                (if (and (map? node) (= :code (:type node)) (:language node))
-                  (update node :language lang-xf)
-                  node))))))))
+  (let [text-replacements (selector-replacements selectors :matcher)
+        url-replacements (selector-replacements selectors :url-matcher)
+        language-replacements (selector-replacements selectors :language-matcher)]
+    (-> results
+        (apply-text-node-replacements text-replacements)
+        (apply-cross-boundary-text-replacements text-replacements)
+        (apply-url-replacements url-replacements)
+        (apply-language-replacements language-replacements))))
 
 (defn- run-pipeline [nodes selector-str]
   (let [parse-ctx {:parse/input selector-str}
@@ -1545,45 +1601,55 @@
      :emit/footnote-counter footnote-counter
      :emit/needs-refs? needs-refs?}))
 
+(defn- make-ref-emission-ctx
+  [{:emit/keys [link-format link-forms footnote-label->num
+                footnote-counter renumber-footnotes]}
+   refs
+   counter
+   url->ref]
+  {:emit/link-format link-format
+   :emit/link-forms link-forms
+   :emit/refs refs
+   :emit/counter counter
+   :emit/url->ref url->ref
+   :emit/footnote-label->num footnote-label->num
+   :emit/footnote-counter footnote-counter
+   :emit/renumber-footnotes renumber-footnotes})
+
+(defn- emit-markdown-group-body
+  [ctx group]
+  (string/join "\n\n" (map (partial emit-node ctx) group)))
+
+(defn- emit-markdown-section-group
+  [section-group context counter url->ref]
+  (let [refs (atom (sorted-map-by ref-key-comparator))
+        ctx (make-ref-emission-ctx context refs counter url->ref)
+        body (emit-markdown-group-body ctx section-group)
+        defs (format-ref-definitions @refs)]
+    (if (seq defs)
+      (str body "\n\n" defs)
+      body)))
+
 (defn- emit-markdown-section-placement
-  [groups group-sep {:emit/keys [link-format link-forms footnote-label->num
-                                 footnote-counter renumber-footnotes
-                                 footnotes-by-label]}]
+  [groups group-sep {:emit/keys [footnote-label->num renumber-footnotes
+                                 footnotes-by-label]
+                     :as context}]
   (let [counter (atom 0)
         url->ref (atom {})
         refs-for-fns (atom (sorted-map-by ref-key-comparator))
-        main-output
-        (string/join group-sep
-                     (mapv (fn [group]
-                             (let [section-groups (group-nodes-by-section (vec group))]
-                               (string/join "\n\n"
-                                            (mapv (fn [sg]
-                                                    (let [refs (atom (sorted-map-by ref-key-comparator))
-                                                          ctx {:emit/link-format link-format
-                                                               :emit/link-forms link-forms
-                                                               :emit/refs refs
-                                                               :emit/counter counter
-                                                               :emit/url->ref url->ref
-                                                               :emit/footnote-label->num footnote-label->num
-                                                               :emit/footnote-counter footnote-counter
-                                                               :emit/renumber-footnotes renumber-footnotes}
-                                                          body (string/join "\n\n" (map (partial emit-node ctx) sg))
-                                                          defs (format-ref-definitions @refs)]
-                                                      (if (seq defs)
-                                                        (str body "\n\n" defs)
-                                                        body)))
-                                                  section-groups))))
-                           groups))
-        ctx {:emit/link-format link-format
-             :emit/link-forms link-forms
-             :emit/refs refs-for-fns
-             :emit/counter counter
-             :emit/url->ref url->ref
-             :emit/footnote-label->num footnote-label->num
-             :emit/footnote-counter footnote-counter
-             :emit/renumber-footnotes renumber-footnotes}
+        main-output (string/join group-sep
+                                 (mapv (fn [group]
+                                         (->> (group-nodes-by-section (vec group))
+                                              (mapv #(emit-markdown-section-group
+                                                      %
+                                                      context
+                                                      counter
+                                                      url->ref))
+                                              (string/join "\n\n")))
+                                       groups))
+        fn-ctx (make-ref-emission-ctx context refs-for-fns counter url->ref)
         fn-defs (when footnotes-by-label
-                  (format-footnote-definitions ctx footnote-label->num footnotes-by-label renumber-footnotes))
+                  (format-footnote-definitions fn-ctx footnote-label->num footnotes-by-label renumber-footnotes))
         ref-defs-from-fns (format-ref-definitions @refs-for-fns)
         suffix (string/join "\n" (remove nil? [ref-defs-from-fns fn-defs]))]
     (if (seq suffix)
@@ -1591,30 +1657,23 @@
       main-output)))
 
 (defn- emit-markdown-doc-placement
-  [groups group-sep {:emit/keys [link-format link-forms footnote-label->num
-                                 footnote-counter renumber-footnotes
-                                 footnotes-by-label]}]
+  [groups group-sep {:emit/keys [footnote-label->num renumber-footnotes
+                                 footnotes-by-label]
+                     :as context}]
   (let [counter (atom 0)
         url->ref (atom {})
         refs (atom (sorted-map-by ref-key-comparator))
-        ctx {:emit/link-format link-format
-             :emit/link-forms link-forms
-             :emit/refs refs
-             :emit/counter counter
-             :emit/url->ref url->ref
-             :emit/footnote-label->num footnote-label->num
-             :emit/footnote-counter footnote-counter
-             :emit/renumber-footnotes renumber-footnotes}
+        ctx (make-ref-emission-ctx context refs counter url->ref)
         body (string/join group-sep
-                          (mapv (fn [group]
-                                  (string/join "\n\n" (map (partial emit-node ctx) group)))
-                                groups))
+                          (mapv (partial emit-markdown-group-body ctx) groups))
         fn-defs (when footnotes-by-label
                   (format-footnote-definitions ctx footnote-label->num footnotes-by-label renumber-footnotes))
         ref-defs (format-ref-definitions @refs)
         defs-sep (if (> (count groups) 1) group-sep "\n\n")
         suffix (string/join "\n" (remove nil? [ref-defs fn-defs]))]
-    (if (seq suffix) (str body defs-sep suffix) body)))
+    (if (seq suffix)
+      (str body defs-sep suffix)
+      body)))
 
 (defn- emit-markdown-inline-format
   [groups group-sep {:emit/keys [link-format link-forms footnote-label->num
@@ -1658,6 +1717,28 @@
 
 (declare nodes->items)
 
+(defn- assoc-when-some [m k value]
+  (cond-> m
+    (some? value) (assoc k value)))
+
+(defn- assoc-when-seq [m k value]
+  (cond-> m
+    (seq value) (assoc k value)))
+
+(defn- code-block-item [node]
+  (let [info (:info node)
+        [lang metadata] (when (seq info)
+                          (string/split info #"\s+" 2))]
+    (-> {:code (content-text node)
+         :type "code"}
+        (assoc-when-seq :language lang)
+        (assoc-when-seq :metadata metadata))))
+
+(defn- linked-item [ctx label-key content url title]
+  (-> {label-key (emit-inline-str ctx content)
+       :url url}
+      (assoc-when-some :title title)))
+
 (defn- node->item
   ([node]
    (node->item nil node))
@@ -1671,29 +1752,25 @@
      {:paragraph (emit-inline-str ctx (:content node))}
 
      :code
-     (let [info (:info node)
-           [lang metadata] (when (seq info)
-                             (string/split info #"\s+" 2))]
-       {:code-block (cond-> {:code (content-text node)
-                             :type "code"}
-                      (seq lang) (assoc :language lang)
-                      (seq metadata) (assoc :metadata metadata))})
+     {:code-block (code-block-item node)}
 
      :block-formula
      {:code-block {:code (:text node)
                    :type "math"}}
 
      :link
-     (let [title (get-in node [:attrs :title])]
-       {:link (cond-> {:display (emit-inline-str ctx (:content node))
-                       :url (get-in node [:attrs :href])}
-                title (assoc :title title))})
+     {:link (linked-item ctx
+                         :display
+                         (:content node)
+                         (get-in node [:attrs :href])
+                         (get-in node [:attrs :title]))}
 
      :image
-     (let [title (get-in node [:attrs :title])]
-       {:image (cond-> {:alt (emit-inline-str ctx (:content node))
-                        :url (get-in node [:attrs :src])}
-                 title (assoc :title title))})
+     {:image (linked-item ctx
+                          :alt
+                          (:content node)
+                          (get-in node [:attrs :src])
+                          (get-in node [:attrs :title]))}
 
      :blockquote
      {:block-quote (nodes->items ctx (:content node))}
@@ -1737,51 +1814,77 @@
      {:front-matter {:variant (name (:format node))
                      :body (:raw node)}}
 
-     ;; default fallback
      (if-let [content (:content node)]
        {:paragraph (emit-inline-str ctx content)}
        {}))))
+
+(defn- finalize-section-item [section-item]
+  (update-in section-item [:section :body] vec))
+
+(defn- same-level-or-new-section? [current-section item]
+  (or (nil? current-section)
+      (<= (get-in item [:section :depth])
+          (get-in current-section [:section :depth]))))
+
+(defn- start-next-section [remaining result current-section item]
+  [(next remaining)
+   (cond-> result
+     current-section (conj (finalize-section-item current-section)))
+   (assoc-in item [:section :body] [])])
+
+(defn- collect-deeper-section-nodes [remaining current-depth node]
+  (loop [r (next remaining)
+         collected [node]]
+    (if-not (seq r)
+      [collected nil]
+      (let [next-node (first r)]
+        (if (and (= :heading (:type next-node))
+                 (<= (:heading-level next-node) current-depth))
+          [collected (seq r)]
+          (recur (next r) (conj collected next-node)))))))
+
+(defn- append-deeper-section [ctx remaining result current-section node]
+  (let [current-depth (get-in current-section [:section :depth])
+        [sub-nodes rest-nodes] (collect-deeper-section-nodes remaining current-depth node)]
+    [rest-nodes
+     result
+     (update-in current-section [:section :body]
+                into
+                (nodes->items ctx sub-nodes))]))
+
+(defn- accumulate-body-item [remaining result current-section item]
+  (if current-section
+    [(next remaining)
+     result
+     (update-in current-section [:section :body] conj item)]
+    [(next remaining)
+     (conj result item)
+     nil]))
 
 (defn- nodes->items
   ([nodes]
    (nodes->items nil nodes))
   ([ctx nodes]
-   (loop [remaining (seq nodes), result [], current-section nil]
+   (loop [remaining (seq nodes)
+          result []
+          current-section nil]
      (if-not remaining
-       (if current-section
-         (conj result (update-in current-section [:section :body] vec))
-         result)
+       (cond-> result
+         current-section (conj (finalize-section-item current-section)))
        (let [node (first remaining)
-             item (node->item ctx node)]
-         (if (:section item)
-           (if (or (nil? current-section)
-                   (<= (get-in item [:section :depth])
-                       (get-in current-section [:section :depth])))
-             ;; Same/shallower: flush current and start new
-             (let [flushed (if current-section
-                             (conj result (update-in current-section [:section :body] vec))
-                             result)]
-               (recur (next remaining) flushed
-                      (assoc-in item [:section :body] [])))
-             ;; Deeper: collect sub-section nodes and recurse
-             (let [current-depth (get-in current-section [:section :depth])
-                   [sub-nodes rest-nodes]
-                   (loop [r (next remaining), collected [node]]
-                     (if-not (seq r)
-                       [collected nil]
-                       (let [n (first r)]
-                         (if (and (= :heading (:type n))
-                                  (<= (:heading-level n) current-depth))
-                           [collected (seq r)]
-                           (recur (next r) (conj collected n))))))]
-               (recur rest-nodes result
-                      (update-in current-section [:section :body]
-                                 into (nodes->items ctx sub-nodes)))))
-           ;; Non-heading: add to body or result
-           (if current-section
-             (recur (next remaining) result
-                    (update-in current-section [:section :body] conj item))
-             (recur (next remaining) (conj result item) nil))))))))
+             item (node->item ctx node)
+             [next-remaining next-result next-current-section]
+             (cond
+               (and (:section item)
+                    (same-level-or-new-section? current-section item))
+               (start-next-section remaining result current-section item)
+
+               (:section item)
+               (append-deeper-section ctx remaining result current-section node)
+
+               :else
+               (accumulate-body-item remaining result current-section item))]
+         (recur next-remaining next-result next-current-section))))))
 
 (defn- node->plain-text [node]
   (case (:type node)
@@ -1886,63 +1989,98 @@
      :emit/link-forms link-forms
      :ref-links ref-links}))
 
-(defn- format-structured-output [nodes opts output-kw]
-  (let [clean-nodes (vec (remove #(= :result-separator (:type %)) nodes))
-        has-selector? (some? (:selector opts))
-        raw-md (:raw-md opts)
-        footnotes (when-let [fns (:footnotes (:ast opts))]
-                    (when (seq fns) fns))
-        {:emit/keys [counter url->ref refs footnote-label->num footnote-counter
-                     footnotes-by-label link-forms]
+(defn- make-json-structured-output-ctx
+  [{:emit/keys [counter url->ref refs footnote-label->num footnote-counter
+                footnotes-by-label link-forms]
+    :as structured-output-context}]
+  (assoc structured-output-context
+         :emit/link-format "never-inline"
+         :emit/link-forms link-forms
+         :emit/counter counter
+         :emit/url->ref url->ref
+         :emit/refs refs
+         :emit/footnote-label->num footnote-label->num
+         :emit/footnote-counter footnote-counter
+         :emit/footnotes-by-label footnotes-by-label
+         :emit/renumber-footnotes true))
+
+(defn- structured-json-items [nodes clean-nodes has-selector? json-ctx]
+  (if has-selector?
+    (let [groups (split-by-separator nodes)]
+      (vec (mapcat #(nodes->items json-ctx (wrap-list-items %)) groups)))
+    (nodes->items json-ctx (wrap-list-items clean-nodes))))
+
+(defn- trim-json-code-blocks [items]
+  (walk/postwalk
+   (fn [x]
+     (if (and (map? x) (:code-block x))
+       (update-in x [:code-block :code] string/trimr)
+       x))
+   items))
+
+(defn- structured-json-links [refs]
+  (when (seq @refs)
+    (into (sorted-map-by ref-key-comparator)
+          (map (fn [[ref-key {:keys [url title]}]]
+                 [(str ref-key)
+                  (cond-> {:url url}
+                    title (assoc :title title))]))
+          @refs)))
+
+(defn- format-json-structured-output [nodes clean-nodes has-selector? structured-output-context]
+  (let [json-ctx (make-json-structured-output-ctx structured-output-context)
+        {:emit/keys [refs footnote-label->num footnotes-by-label]
          :keys [ref-links]}
-        (make-structured-output-context raw-md footnotes)
-        json? (= :json output-kw)
-        make-ctx (fn [] {:emit/link-format "never-inline"
-                         :emit/link-forms link-forms
-                         :emit/counter counter
-                         :emit/url->ref url->ref
-                         :emit/refs refs
-                         :emit/footnote-label->num footnote-label->num
-                         :emit/footnote-counter footnote-counter
-                         :emit/renumber-footnotes true})
-        items (if (and json? has-selector?)
-                (let [groups (split-by-separator nodes)
-                      ctx (make-ctx)]
-                  (vec (mapcat #(nodes->items ctx (wrap-list-items %)) groups)))
-                (let [ctx (when json? (make-ctx))]
-                  (nodes->items ctx (wrap-list-items clean-nodes))))
-        json-footnotes (when (and json? footnotes-by-label (seq @footnote-label->num))
-                         (build-json-footnotes (make-ctx) footnote-label->num footnotes-by-label))
-        json-links (when (and json? (seq @refs))
-                     (into (sorted-map-by ref-key-comparator)
-                           (map (fn [[ref-key {:keys [url title]}]]
-                                  [(str ref-key)
-                                   (cond-> {:url url}
-                                     title (assoc :title title))]))
-                           @refs))
-        items (if json?
-                (walk/postwalk
-                 (fn [x]
-                   (if (and (map? x) (:code-block x))
-                     (update-in x [:code-block :code] string/trimr)
-                     x))
-                 items)
-                items)
-        json-data (when json? (items->json-data items))
-        json-items (if (and json? (not has-selector?))
-                     [{:document json-data}]
-                     json-data)]
-    (case output-kw
-      :json (json/generate-string
-             (cond-> {:items json-items}
-               json-footnotes (assoc :footnotes json-footnotes)
-               json-links (assoc :links json-links)
-               (and (seq ref-links) (not has-selector?) (not json-links))
-               (assoc :links ref-links))
-             {:pretty true})
-      :edn (let [result (cond-> {:items items}
-                          footnotes (assoc :footnotes footnotes))]
-             (with-out-str (pp/pprint result))))))
+        structured-output-context
+        items (-> (structured-json-items nodes clean-nodes has-selector? json-ctx)
+                  trim-json-code-blocks)
+        json-footnotes (when (and footnotes-by-label (seq @footnote-label->num))
+                         (build-json-footnotes json-ctx footnote-label->num footnotes-by-label))
+        json-links (structured-json-links refs)
+        json-data (items->json-data items)
+        json-items (if has-selector?
+                     json-data
+                     [{:document json-data}])]
+    (json/generate-string
+     (cond-> {:items json-items}
+       json-footnotes (assoc :footnotes json-footnotes)
+       json-links (assoc :links json-links)
+       (and (seq ref-links) (not has-selector?) (not json-links))
+       (assoc :links ref-links))
+     {:pretty true})))
+
+(defn- format-edn-structured-output [clean-nodes footnotes]
+  (let [items (nodes->items (wrap-list-items clean-nodes))
+        result (cond-> {:items items}
+                 footnotes (assoc :footnotes footnotes))]
+    (with-out-str (pp/pprint result))))
+
+(defn- structured-output-footnotes [opts]
+  (when-let [fns (:footnotes (:ast opts))]
+    (when (seq fns) fns)))
+
+(defn- clean-structured-output-nodes [nodes]
+  (vec (remove #(= :result-separator (:type %)) nodes)))
+
+(defn- format-json-structured-output-for-opts [nodes opts]
+  (let [clean-nodes (clean-structured-output-nodes nodes)
+        has-selector? (some? (:selector opts))
+        footnotes (structured-output-footnotes opts)]
+    (format-json-structured-output
+     nodes
+     clean-nodes
+     has-selector?
+     (make-structured-output-context (:raw-md opts) footnotes))))
+
+(defn- format-edn-structured-output-for-opts [nodes opts]
+  (let [clean-nodes (clean-structured-output-nodes nodes)
+        footnotes (structured-output-footnotes opts)]
+    (format-edn-structured-output clean-nodes footnotes)))
+
+(defn- format-structured-output [nodes opts output-kw]
+  (case output-kw
+    :json (format-json-structured-output-for-opts nodes opts)
+    :edn (format-edn-structured-output-for-opts nodes opts)))
 
 (defn- format-output [nodes opts]
   (let [output-kw (keyword (or (:output opts) "markdown"))
@@ -1953,29 +2091,25 @@
       (format-structured-output nodes opts output-kw))))
 
 (defn- pre-process-front-matter [input]
-  (let [lines (string/split-lines input)]
+  (let [lines (string/split-lines input)
+        lines-vec (vec lines)
+        extract-front-matter (fn [format delimiter]
+                               (let [end-idx (->> (rest lines)
+                                                  (keep-indexed (fn [i line]
+                                                                  (when (= delimiter line)
+                                                                    (inc i))))
+                                                  first)]
+                                 (if end-idx
+                                   {:front-matter {:format format
+                                                   :raw (string/join "\n" (subvec lines-vec 1 end-idx))}
+                                    :body (string/join "\n" (subvec lines-vec (inc end-idx)))}
+                                   {:front-matter nil :body input})))]
     (cond
-      ;; YAML front matter
       (= "---" (first lines))
-      (let [end-idx (->> (rest lines)
-                         (keep-indexed (fn [i line] (when (= "---" line) (inc i))))
-                         first)]
-        (if end-idx
-          {:front-matter {:format :yaml
-                          :raw (string/join "\n" (subvec (vec lines) 1 end-idx))}
-           :body (string/join "\n" (subvec (vec lines) (inc end-idx)))}
-          {:front-matter nil :body input}))
+      (extract-front-matter :yaml "---")
 
-      ;; TOML front matter
       (= "+++" (first lines))
-      (let [end-idx (->> (rest lines)
-                         (keep-indexed (fn [i line] (when (= "+++" line) (inc i))))
-                         first)]
-        (if end-idx
-          {:front-matter {:format :toml
-                          :raw (string/join "\n" (subvec (vec lines) 1 end-idx))}
-           :body (string/join "\n" (subvec (vec lines) (inc end-idx)))}
-          {:front-matter nil :body input}))
+      (extract-front-matter :toml "+++")
 
       :else
       {:front-matter nil :body input})))

@@ -160,7 +160,12 @@ Use `--` to force selector interpretation: `bbg mdq -- '- item'`
 
 ## Testing
 
-Unit tests (`scripts/mdq/mdq_test.clj`) and E2E tests (`test/mdq_e2e_test.clj`) run automatically via VS Code watch tasks. The "Dev" compound task (Cmd+Shift+B) starts both watchers alongside the bb nREPL. Watchers re-run on file save — no need to run tests manually.
+~~Unit tests (`scripts/mdq/mdq_test.clj`) and E2E tests (`test/mdq_e2e_test.clj`) run automatically via VS Code watch tasks. The "Dev" compound task (Cmd+Shift+B) starts both watchers alongside the bb nREPL. Watchers re-run on file save — no need to run tests manually.~~ The get task output tool is temporarily broken.
+
+For now: Use direct bb tasks as the primary verification path:
+
+- `bbg test` for unit tests (tests found in `scripts/mdq/mdq_test.clj`)
+- `bbg e2e-test` for E2E tests (tests found in `test/mdq_e2e_test.clj`)
 
 To run a specific E2E spec file:
 
