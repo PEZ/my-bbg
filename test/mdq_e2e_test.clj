@@ -1,14 +1,16 @@
 (ns mdq-e2e-test
-  (:require [babashka.process :as p]
+  (:require [babashka.fs :as fs]
+            [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.string :as str]
             [e2e-specs]))
 
 (defn- run-mdq
   "Run bbg mdq as subprocess. Returns {:exit :out :err}."
-  [markdown cli-args]
+  [markdown cli-args {:keys [dir]}]
   (let [result (apply p/shell
-                      {:in markdown :out :string :err :string :continue true}
+                      (cond-> {:in markdown :out :string :err :string :continue true}
+                        dir (assoc :dir dir))
                       "bbg" "mdq" cli-args)]
     {:exit (:exit result)
      :out (:out result)
@@ -27,11 +29,17 @@
 
 (defn- run-test-case
   "Run one test expectation, return result map."
-  [{:keys [given-md file]} {:keys [name cli-args expected-output expect-success
-                                    output-json output-err ignore]}]
+  [{:keys [given-md given-files file]} {:keys [name cli-args expected-output expect-success
+                                               output-json output-err ignore]}]
   (if ignore
     {:spec file :test name :status :skipped :reason ignore}
-    (let [{:keys [exit out err]} (run-mdq given-md cli-args)
+    (let [;; Create temp files if spec has file definitions
+          tmp-dir (when given-files
+                    (let [d (fs/create-temp-dir)]
+                      (doseq [[fname content] given-files]
+                        (spit (str (fs/path d (clojure.core/name fname))) content))
+                      d))
+          {:keys [exit out err]} (run-mdq given-md cli-args {:dir (when tmp-dir (str tmp-dir))})
           exit-ok? (if expect-success (zero? exit) (not (zero? exit)))
           output-ok? (cond
                        (nil? expected-output) true
@@ -43,6 +51,7 @@
                     (str/includes? err output-err)
                     true)
           pass? (and exit-ok? output-ok? err-ok?)]
+      (when tmp-dir (fs/delete-tree tmp-dir))
       (cond-> {:spec file :test name :status (if pass? :pass :fail)}
         (not exit-ok?) (assoc :exit-expected (if expect-success 0 "non-zero") :exit-actual exit)
         (not output-ok?) (assoc :expected (normalize-expected (or expected-output ""))

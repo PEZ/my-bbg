@@ -18,10 +18,11 @@
 
 (defn parse-spec
   "Parse a TOML spec string into canonical data shape.
-   Returns {:file :given-md :expectations [...]}"
+   Returns {:file :given-md :given-files :expectations [...]}"
   [toml-string file-name]
   (let [parsed (parse-toml toml-string)
         given-md (get-in parsed [:given :md])
+        given-files (get-in parsed [:given :files])
         expects (:expect parsed)
         expectations (->> expects
                           (mapv (fn [[test-name data]]
@@ -34,6 +35,7 @@
                                    :ignore (:ignore data)})))]
     {:file file-name
      :given-md given-md
+     :given-files given-files
      :expectations expectations}))
 
 (defn download-specs!
