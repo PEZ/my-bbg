@@ -1075,7 +1075,7 @@
   "Emits a link in never-inline mode. Preserves collapsed/shortcut/non-numeric reference forms.
    Inline and numeric reference links are assigned sequential numeric refs."
   [ctx node text href link-form]
-  (let [{:keys [url->ref counter refs]} ctx
+  (let [{:emit/keys [url->ref counter refs]} ctx
         form (:form link-form)
         title (or (:title link-form) (get-in node [:attrs :title]))
         title-quote (or (:title-quote link-form) \")]
@@ -1117,7 +1117,7 @@
 (defn- emit-link-keep
   "Emits a link preserving its original form."
   [ctx node text href link-form]
-  (let [{:keys [refs]} ctx
+  (let [{:emit/keys [refs]} ctx
         form-info (or link-form {:form :inline})
         form (:form form-info)
         title (or (:title form-info) (get-in node [:attrs :title]))
@@ -1150,10 +1150,10 @@
       (str "[" text "](" href ")"))))
 
 (defn- emit-footnote-ref [ctx label]
-  (if-let [label->num (:footnote-label->num ctx)]
-    (if (not= false (:renumber-footnotes ctx))
+  (if-let [label->num (:emit/footnote-label->num ctx)]
+    (if (not= false (:emit/renumber-footnotes ctx))
       (let [num (or (get @label->num label)
-                    (let [n (swap! (:footnote-counter ctx) inc)]
+                    (let [n (swap! (:emit/footnote-counter ctx) inc)]
                       (swap! label->num assoc label n)
                       n))]
         (str "[^" num "]"))
@@ -1164,8 +1164,8 @@
 (defn- emit-inline-link [ctx node]
   (let [text (emit-inline-str ctx (:content node))
         href (get-in node [:attrs :href])
-        link-format (:link-format ctx)
-        link-forms (:link-forms ctx)
+        link-format (:emit/link-format ctx)
+        link-forms (:emit/link-forms ctx)
         link-form (when link-forms (get link-forms [text href]))]
     (case link-format
       "never-inline" (emit-link-never-inline ctx node text href link-form)
@@ -1175,8 +1175,8 @@
       (str "[" text "](" href ")"))))
 
 (defn- emit-inline-image [ctx node]
-  (if (and ctx (contains? #{"reference" "never-inline"} (:link-format ctx)))
-    (let [{:keys [url->ref counter refs]} ctx
+  (if (and ctx (contains? #{"reference" "never-inline"} (:emit/link-format ctx)))
+    (let [{:emit/keys [url->ref counter refs]} ctx
           src (get-in node [:attrs :src])
           alt (emit-inline-str ctx (:content node))
           dedup-key [src nil]
@@ -1450,20 +1450,20 @@
         footnote-label->num (atom {})
         footnote-counter (atom 0)
         needs-refs? (contains? #{"reference" "never-inline" "keep"} link-format)]
-    {:ref-defs ref-defs
-     :link-forms link-forms
-     :link-format link-format
-     :link-placement link-placement
-     :renumber-footnotes renumber-footnotes
-     :footnotes-by-label footnotes-by-label
-     :footnote-label->num footnote-label->num
-     :footnote-counter footnote-counter
-     :needs-refs? needs-refs?}))
+    {:emit/ref-defs ref-defs
+     :emit/link-forms link-forms
+     :emit/link-format link-format
+     :emit/link-placement link-placement
+     :emit/renumber-footnotes renumber-footnotes
+     :emit/footnotes-by-label footnotes-by-label
+     :emit/footnote-label->num footnote-label->num
+     :emit/footnote-counter footnote-counter
+     :emit/needs-refs? needs-refs?}))
 
 (defn- emit-markdown-section-placement
-  [groups group-sep {:keys [link-format link-forms footnote-label->num
-                            footnote-counter renumber-footnotes
-                            footnotes-by-label]}]
+  [groups group-sep {:emit/keys [link-format link-forms footnote-label->num
+                                 footnote-counter renumber-footnotes
+                                 footnotes-by-label]}]
   (let [counter (atom 0)
         url->ref (atom {})
         refs-for-fns (atom (sorted-map-by ref-key-comparator))
@@ -1474,14 +1474,14 @@
                                (string/join "\n\n"
                                             (mapv (fn [sg]
                                                     (let [refs (atom (sorted-map-by ref-key-comparator))
-                                                          ctx {:link-format link-format
-                                                               :link-forms link-forms
-                                                               :refs refs
-                                                               :counter counter
-                                                               :url->ref url->ref
-                                                               :footnote-label->num footnote-label->num
-                                                               :footnote-counter footnote-counter
-                                                               :renumber-footnotes renumber-footnotes}
+                                                          ctx {:emit/link-format link-format
+                                                               :emit/link-forms link-forms
+                                                               :emit/refs refs
+                                                               :emit/counter counter
+                                                               :emit/url->ref url->ref
+                                                               :emit/footnote-label->num footnote-label->num
+                                                               :emit/footnote-counter footnote-counter
+                                                               :emit/renumber-footnotes renumber-footnotes}
                                                           body (string/join "\n\n" (map (partial emit-node ctx) sg))
                                                           defs (format-ref-definitions @refs)]
                                                       (if (seq defs)
@@ -1489,14 +1489,14 @@
                                                         body)))
                                                   section-groups))))
                            groups))
-        ctx {:link-format link-format
-             :link-forms link-forms
-             :refs refs-for-fns
-             :counter counter
-             :url->ref url->ref
-             :footnote-label->num footnote-label->num
-             :footnote-counter footnote-counter
-             :renumber-footnotes renumber-footnotes}
+        ctx {:emit/link-format link-format
+             :emit/link-forms link-forms
+             :emit/refs refs-for-fns
+             :emit/counter counter
+             :emit/url->ref url->ref
+             :emit/footnote-label->num footnote-label->num
+             :emit/footnote-counter footnote-counter
+             :emit/renumber-footnotes renumber-footnotes}
         fn-defs (when footnotes-by-label
                   (format-footnote-definitions ctx footnote-label->num footnotes-by-label renumber-footnotes))
         ref-defs-from-fns (format-ref-definitions @refs-for-fns)
@@ -1506,20 +1506,20 @@
       main-output)))
 
 (defn- emit-markdown-doc-placement
-  [groups group-sep {:keys [link-format link-forms footnote-label->num
-                            footnote-counter renumber-footnotes
-                            footnotes-by-label]}]
+  [groups group-sep {:emit/keys [link-format link-forms footnote-label->num
+                                 footnote-counter renumber-footnotes
+                                 footnotes-by-label]}]
   (let [counter (atom 0)
         url->ref (atom {})
         refs (atom (sorted-map-by ref-key-comparator))
-        ctx {:link-format link-format
-             :link-forms link-forms
-             :refs refs
-             :counter counter
-             :url->ref url->ref
-             :footnote-label->num footnote-label->num
-             :footnote-counter footnote-counter
-             :renumber-footnotes renumber-footnotes}
+        ctx {:emit/link-format link-format
+             :emit/link-forms link-forms
+             :emit/refs refs
+             :emit/counter counter
+             :emit/url->ref url->ref
+             :emit/footnote-label->num footnote-label->num
+             :emit/footnote-counter footnote-counter
+             :emit/renumber-footnotes renumber-footnotes}
         body (string/join group-sep
                           (mapv (fn [group]
                                   (string/join "\n\n" (map (partial emit-node ctx) group)))
@@ -1532,14 +1532,14 @@
     (if (seq suffix) (str body defs-sep suffix) body)))
 
 (defn- emit-markdown-inline-format
-  [groups group-sep {:keys [link-format link-forms footnote-label->num
-                            footnote-counter renumber-footnotes
-                            footnotes-by-label]}]
-  (let [ctx {:link-format link-format
-             :link-forms link-forms
-             :footnote-label->num footnote-label->num
-             :footnote-counter footnote-counter
-             :renumber-footnotes renumber-footnotes}
+  [groups group-sep {:emit/keys [link-format link-forms footnote-label->num
+                                 footnote-counter renumber-footnotes
+                                 footnotes-by-label]}]
+  (let [ctx {:emit/link-format link-format
+             :emit/link-forms link-forms
+             :emit/footnote-label->num footnote-label->num
+             :emit/footnote-counter footnote-counter
+             :emit/renumber-footnotes renumber-footnotes}
         main-output (string/join group-sep
                                  (mapv (fn [group]
                                          (string/join "\n\n" (map (partial emit-node ctx) group)))
@@ -1559,8 +1559,8 @@
          context (make-emit-context raw-md opts footnotes)
          groups (separate-results nodes)
          group-sep (if (:no-br opts) "\n\n" "\n\n   -----\n\n")]
-     (if (:needs-refs? context)
-       (if (= "section" (:link-placement context))
+     (if (:emit/needs-refs? context)
+       (if (= "section" (:emit/link-placement context))
          (emit-markdown-section-placement groups group-sep context)
          (emit-markdown-doc-placement groups group-sep context))
        (emit-markdown-inline-format groups group-sep context)))))
@@ -1788,17 +1788,17 @@
         link-forms (when raw-md (detect-link-forms raw-md ref-links))
         footnotes-by-label (when footnotes
                              (into {} (map (juxt :label identity)) footnotes))]
-    {:counter (atom 0)
-     :url->ref (atom (if ref-links
-                       (reduce-kv (fn [m ref {:keys [url]}]
-                                    (assoc m url ref))
-                                  {} ref-links)
-                       {}))
-     :refs (atom (sorted-map-by ref-key-comparator))
-     :footnote-label->num (atom {})
-     :footnote-counter (atom 0)
-     :footnotes-by-label footnotes-by-label
-     :link-forms link-forms
+    {:emit/counter (atom 0)
+     :emit/url->ref (atom (if ref-links
+                            (reduce-kv (fn [m ref {:keys [url]}]
+                                         (assoc m url ref))
+                                       {} ref-links)
+                            {}))
+     :emit/refs (atom (sorted-map-by ref-key-comparator))
+     :emit/footnote-label->num (atom {})
+     :emit/footnote-counter (atom 0)
+     :emit/footnotes-by-label footnotes-by-label
+     :emit/link-forms link-forms
      :ref-links ref-links}))
 
 (defn- format-structured-output [nodes opts output-kw]
@@ -1807,18 +1807,19 @@
         raw-md (:raw-md opts)
         footnotes (when-let [fns (:footnotes (:ast opts))]
                     (when (seq fns) fns))
-        {:keys [counter url->ref refs footnote-label->num footnote-counter
-                footnotes-by-label link-forms ref-links]}
+        {:emit/keys [counter url->ref refs footnote-label->num footnote-counter
+                     footnotes-by-label link-forms]
+         :keys [ref-links]}
         (make-structured-output-context raw-md footnotes)
         json? (= :json output-kw)
-        make-ctx (fn [] {:link-format "never-inline"
-                         :link-forms link-forms
-                         :counter counter
-                         :url->ref url->ref
-                         :refs refs
-                         :footnote-label->num footnote-label->num
-                         :footnote-counter footnote-counter
-                         :renumber-footnotes true})
+        make-ctx (fn [] {:emit/link-format "never-inline"
+                         :emit/link-forms link-forms
+                         :emit/counter counter
+                         :emit/url->ref url->ref
+                         :emit/refs refs
+                         :emit/footnote-label->num footnote-label->num
+                         :emit/footnote-counter footnote-counter
+                         :emit/renumber-footnotes true})
         items (if (and json? has-selector?)
                 (let [groups (split-by-separator nodes)
                       ctx (make-ctx)]
