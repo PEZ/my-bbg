@@ -110,7 +110,7 @@
                   (println (str "    actual:   " (pr-str act))))
               (println (str "    output mismatch (expected " (count exp) " chars, got " (count act) " chars)")))))
         (when (:err-expected r)
-          (println (str "    stderr mismatch")))))
+          (println "    stderr mismatch"))))
     (println)
     (println (str pass " passed, " fail " failed, " skipped " skipped, "
                   (count results) " total"))
@@ -118,7 +118,7 @@
 
 (defn run!
   "Run E2E tests. Options: :refresh (re-download specs), :spec (single spec file), :subprocess (use subprocess)."
-  [{:keys [refresh spec subprocess] :as opts}]
+  [{:keys [refresh spec] :as opts}]
   (e2e-specs/ensure-specs! :refresh? refresh)
   (let [specs (e2e-specs/load-specs :spec-file spec)
         _ (println (str "Running " (count specs) " specs, "
