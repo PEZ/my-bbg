@@ -981,12 +981,24 @@
                    (update-in current-section [:section :body] conj item))
             (recur (next remaining) (conj result item) nil)))))))
 
+(defn- node->plain-texts [node]
+  (case (:type node)
+    (:bullet-list :numbered-list :todo-list)
+    (map md/node->text (:content node))
+
+    :code
+    [(str/trimr (md/node->text node))]
+
+    [(md/node->text node)]))
+
 (defn format-output [nodes opts]
   (let [output-kw (keyword (or (:output opts) "markdown"))
         output-kw (if (= :md output-kw) :markdown output-kw)]
     (case output-kw
       :markdown (emit-markdown nodes opts)
-      :plain (str/join "\n\n" (map md/node->text nodes))
+      :plain (let [texts (mapcat node->plain-texts nodes)
+                   sep (if (:br opts) "\n\n" "\n")]
+               (str (str/join sep texts) "\n"))
       (let [items (nodes->items nodes)
             footnotes (when-let [fns (:footnotes (:ast opts))]
                         (when (seq fns) fns))
