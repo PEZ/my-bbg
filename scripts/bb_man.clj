@@ -276,6 +276,7 @@
       (fs/set-posix-file-permissions home-bb "rwxr-xr-x")
       (println (str "Installed to: " home-bb))
       (println (str "  Version: " (bb-version home-bb)))
+      (println "Note: Run `hash -r` or open a new terminal to update your shell's bb path.")
       home-bb)))
 
 (defn- unuse! []
