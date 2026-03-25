@@ -5,58 +5,10 @@
             [cheshire.core :as json]
             [clojure.string :as str]))
 
-;; --- Config ---
-
-
-
-
-
-;; --- Gather (impure but safe) ---
-
-
-
-
-
-
-
-
-
-
-
-;; --- Transform (pure) ---
-
-
-
-
-
-;; --- Validate & Resolve ---
-
-
-
-;; --- Find runs & artifacts ---
-
-
-
-
-
-
-
-
-
-;; --- Act (side effects) ---
-
-
-
-
-
-;; --- Config ---
-
 (def ^:private bb-repo "babashka/babashka")
 (def ^:private bb-api (str "https://api.github.com/repos/" bb-repo))
 (def ^:private build-workflow-id 900192)
 (def ^:private home-bb (str (fs/home) "/bin/bb"))
-
-;; --- Gather (impure but safe) ---
 
 (defn- gh-token []
   (-> (p/shell {:out :string} "gh" "auth" "token")
@@ -110,8 +62,6 @@
        first
        :id))
 
-;; --- Transform (pure) ---
-
 (defn classify-ref
   "Classifies a git ref string into {:type ...}.
    Recognizes :latest, :pr, :sha, and :branch-or-tag."
@@ -127,8 +77,6 @@
   (->> artifacts
        (filter #(str/includes? (:name %) "macos-aarch64"))
        first))
-
-;; --- Validate & Resolve ---
 
 (defn resolve-ref
   "Validates that a git ref exists and resolves it to a SHA.
@@ -165,8 +113,6 @@
          :description (str "ref '" (:name classified) "' at " (subs (:sha commit) 0 12))}
         (throw (ex-info (str "Branch or tag '" (:name classified) "' not found in " bb-repo)
                         {:ref ref :type type}))))))
-
-;; --- Find runs & artifacts ---
 
 (defn- find-runs-by-branch [branch]
   (:workflow_runs
@@ -219,8 +165,6 @@
        :download-url (:archive_download_url artifact)
        :expired (:expired artifact)})))
 
-;; --- Act (side effects) ---
-
 (defn download-bb!
   "Downloads the macOS Silicon bb binary for the given ref to /tmp/bbg/.
    Returns the path to the downloaded binary, or nil if not found."
@@ -239,8 +183,6 @@
 
 (defn- which-bb []
   (-> (p/shell {:out :string} "which" "bb") :out str/trim))
-
-;; --- Task operations ---
 
 (defn- status! []
   (let [has-home-bb (fs/exists? home-bb)
@@ -290,8 +232,6 @@
       dest)
     (do (println (str "No bb found at " home-bb " — nothing to uninstall."))
         nil)))
-
-;; --- CLI ---
 
 (def cli-spec
   {:coerce {:download :string
