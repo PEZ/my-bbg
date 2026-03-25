@@ -124,18 +124,18 @@
 
 (deftest parse-selector-test
   (testing "section selector"
-    (is (= :section (:type (#'mdq/parse-selector {:parse/input "# hello"} "# hello"))))
-    (is (nil? (:level (#'mdq/parse-selector {:parse/input "# hello"} "# hello"))))
-    (is (= 2 (:level (#'mdq/parse-selector {:parse/input "## hello"} "## hello"))))
-    (is (= 3 (:level (#'mdq/parse-selector {:parse/input "###"} "###")))))
+    (is (= :section (:type (#'mdq/parse-selector-insta {:parse/input "# hello"} "# hello"))))
+    (is (nil? (:level (#'mdq/parse-selector-insta {:parse/input "# hello"} "# hello"))))
+    (is (= 2 (:level (#'mdq/parse-selector-insta {:parse/input "## hello"} "## hello"))))
+    (is (= 3 (:level (#'mdq/parse-selector-insta {:parse/input "###"} "###")))))
   (testing "section without text has nil matcher"
-    (is (nil? (:matcher (#'mdq/parse-selector {:parse/input "#"} "#")))))
+    (is (nil? (:matcher (#'mdq/parse-selector-insta {:parse/input "#"} "#")))))
   (testing "single-column table selectors remain valid"
-    (is (= :table (:type (#'mdq/parse-selector {:parse/input ":-: Name"} ":-: Name")))))
+    (is (= :table (:type (#'mdq/parse-selector-insta {:parse/input ":-: Name"} ":-: Name")))))
   (testing "phase 2 dispatch rejections return parse errors at col 1"
     (doseq [selector ["\"hello\"" "~" "2. hello" ":-: *" "P *" "P : *"]]
       (let [error (try
-                    (#'mdq/parse-selector {:parse/input selector} selector)
+                    (#'mdq/parse-selector-insta {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -164,7 +164,7 @@
                :message "expected \"[x]\", \"[x]\", or \"[?]\""
                :input "- [*]"}]]]
       (let [error (try
-                    (#'mdq/parse-selector {:parse/input selector} selector)
+                    (#'mdq/parse-selector-insta {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -195,7 +195,7 @@
                :message "expected \"$\""
                :input "[](http"}]]]
       (let [error (try
-                    (#'mdq/parse-selector {:parse/input selector} selector)
+                    (#'mdq/parse-selector-insta {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -232,7 +232,7 @@
                :message "invalid unicode sequence: FFFFFF"
                :input "# \"\\u{FFFFFF}\""}]]]
       (let [error (try
-                    (#'mdq/parse-selector {:parse/input selector} selector)
+                    (#'mdq/parse-selector-insta {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -264,7 +264,7 @@
                :message "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""
                :input "</> <span>"}]]]
       (let [error (try
-                    (#'mdq/parse-selector {:parse/input selector} selector)
+                    (#'mdq/parse-selector-insta {:parse/input selector} selector)
                     (catch clojure.lang.ExceptionInfo e
                       e))]
         (is (instance? clojure.lang.ExceptionInfo error)
@@ -404,102 +404,73 @@
 
 (deftest parse-selector-elements-test
   (testing "unordered list"
-    (let [sel (#'mdq/parse-selector {:parse/input "- item"} "- item")]
+    (let [sel (#'mdq/parse-selector-insta {:parse/input "- item"} "- item")]
       (is (= :list-item (:type sel)))
       (is (= :unordered (:list-kind sel)))))
   (testing "ordered list"
-    (let [sel (#'mdq/parse-selector {:parse/input "1. item"} "1. item")]
+    (let [sel (#'mdq/parse-selector-insta {:parse/input "1. item"} "1. item")]
       (is (= :list-item (:type sel)))
       (is (= :ordered (:list-kind sel)))))
   (testing "unchecked task"
-    (let [sel (#'mdq/parse-selector {:parse/input "- [ ] todo"} "- [ ] todo")]
+    (let [sel (#'mdq/parse-selector-insta {:parse/input "- [ ] todo"} "- [ ] todo")]
       (is (= :task (:type sel)))
       (is (= :unchecked (:task-kind sel)))))
   (testing "checked task"
-    (let [sel (#'mdq/parse-selector {:parse/input "- [x] done"} "- [x] done")]
+    (let [sel (#'mdq/parse-selector-insta {:parse/input "- [x] done"} "- [x] done")]
       (is (= :task (:type sel)))
       (is (= :checked (:task-kind sel)))))
   (testing "any task"
-    (is (= :any (:task-kind (#'mdq/parse-selector {:parse/input "- [?]"} "- [?]")))))
+    (is (= :any (:task-kind (#'mdq/parse-selector-insta {:parse/input "- [?]"} "- [?]")))))
   (testing "blockquote"
-    (is (= :blockquote (:type (#'mdq/parse-selector {:parse/input "> quote"} "> quote")))))
+    (is (= :blockquote (:type (#'mdq/parse-selector-insta {:parse/input "> quote"} "> quote")))))
   (testing "code block"
-    (let [sel (#'mdq/parse-selector {:parse/input "```clojure"} "```clojure")]
+    (let [sel (#'mdq/parse-selector-insta {:parse/input "```clojure"} "```clojure")]
       (is (= :code (:type sel)))))
   (testing "link"
-    (let [sel (#'mdq/parse-selector {:parse/input "[text](url)"} "[text](url)")]
+    (let [sel (#'mdq/parse-selector-insta {:parse/input "[text](url)"} "[text](url)")]
       (is (= :link (:type sel)))))
   (testing "image"
-    (let [sel (#'mdq/parse-selector {:parse/input "![alt](src)"} "![alt](src)")]
+    (let [sel (#'mdq/parse-selector-insta {:parse/input "![alt](src)"} "![alt](src)")]
       (is (= :image (:type sel)))))
   (testing "HTML"
-    (is (= :html (:type (#'mdq/parse-selector {:parse/input "</> div"} "</> div")))))
+    (is (= :html (:type (#'mdq/parse-selector-insta {:parse/input "</> div"} "</> div")))))
   (testing "paragraph"
-    (is (= :paragraph (:type (#'mdq/parse-selector {:parse/input "P: hello"} "P: hello"))))))
+    (is (= :paragraph (:type (#'mdq/parse-selector-insta {:parse/input "P: hello"} "P: hello"))))))
 
-(deftest parse-selector-insta-equivalence-test
-  (testing "structural equivalence with existing parser"
-    (let [test-texts ["Hello World" "goodbye" "exact" "Introduction" "tab\there"]
-          check (fn [input]
+(deftest parse-selector-insta-smoke-test
+  (testing "parser produces correct types for all selector kinds"
+    (let [check (fn [input expected-type]
                   (let [ctx {:parse/input input}
-                        old (#'mdq/parse-selector ctx input)
-                        new (#'mdq/parse-selector-insta ctx input)
-                        compare-matcher (fn [old-m new-m]
-                                          (if (and old-m new-m)
-                                            (every? (fn [t]
-                                                      (= (boolean (#'mdq/text-matches? old-m t))
-                                                         (boolean (#'mdq/text-matches? new-m t))))
-                                                    test-texts)
-                                            (= (nil? old-m) (nil? new-m))))]
-                    (is (= (:type old) (:type new))
-                        (str input " - type mismatch"))
-                    (is (= (:level old) (:level new))
-                        (str input " - level mismatch"))
-                    (is (= (:level-range old) (:level-range new))
-                        (str input " - level-range mismatch"))
-                    (is (= (:task-kind old) (:task-kind new))
-                        (str input " - task-kind mismatch"))
-                    (is (= (:list-kind old) (:list-kind new))
-                        (str input " - list-kind mismatch"))
-                    (is (= (:format old) (:format new))
-                        (str input " - format mismatch"))
-                    (is (compare-matcher (:matcher old) (:matcher new))
-                        (str input " - matcher mismatch"))
-                    (is (compare-matcher (:url-matcher old) (:url-matcher new))
-                        (str input " - url-matcher mismatch"))
-                    (is (compare-matcher (:language-matcher old) (:language-matcher new))
-                        (str input " - language-matcher mismatch"))
-                    (is (compare-matcher (:col-matcher old) (:col-matcher new))
-                        (str input " - col-matcher mismatch"))
-                    (is (compare-matcher (:row-matcher old) (:row-matcher new))
-                        (str input " - row-matcher mismatch"))))]
-      (doseq [input ["#" "## hello" "### world" "# ^intro" "# api$" "# ^\"exact\"$"
-                     "# /hel+o/" "# !s/foo/bar/" "# *"
-                     "#{2,4} foo" "#{3}" "#{,4}" "#{3,}"
-                     "- hello" "-" "- *"
-                     "1. hello" "1." "1. *"
-                     "- [x] done" "- [ ] todo" "- [?]"
-                     "1. [x] done" "1. [ ] todo"
-                     "> hello" ">" "> *"
-                     "P: hello" "P:" "P: *"
-                     "```python hello" "``` hello" "```python" "```"
-                     "[text](url)" "[text]" "[](url)" "[]"
-                     "![alt](src)" "![alt]" "![](src)"
-                     "</> div" "</>" "</> *"
-                     "+++" "+++yaml" "+++toml" "+++ text" "+++yaml text"
-                     ":-:c:-:r" ":-:col"]]
-        (check input))))
-  (testing "escape sequence handling matches"
-    (let [check-escape (fn [input]
+                        result (#'mdq/parse-selector-insta ctx input)]
+                    (is (= expected-type (:type result))
+                        (str input " - expected type " expected-type))))]
+      (doseq [[input expected] [["#" :section] ["## hello" :section] ["### world" :section]
+                                ["# ^intro" :section] ["# api$" :section] ["# ^\"exact\"$" :section]
+                                ["# /hel+o/" :section] ["# !s/foo/bar/" :section] ["# *" :section]
+                                ["#{2,4} foo" :section] ["#{3}" :section] ["#{,4}" :section] ["#{3,}" :section]
+                                ["- hello" :list-item] ["-" :list-item] ["- *" :list-item]
+                                ["1. hello" :list-item] ["1." :list-item] ["1. *" :list-item]
+                                ["- [x] done" :task] ["- [ ] todo" :task] ["- [?]" :task]
+                                ["1. [x] done" :task] ["1. [ ] todo" :task]
+                                ["> hello" :blockquote] [">" :blockquote] ["> *" :blockquote]
+                                ["P: hello" :paragraph] ["P:" :paragraph] ["P: *" :paragraph]
+                                ["```python hello" :code] ["``` hello" :code] ["```python" :code] ["```" :code]
+                                ["[text](url)" :link] ["[text]" :link] ["[](url)" :link] ["[]" :link]
+                                ["![alt](src)" :image] ["![alt]" :image] ["![](src)" :image]
+                                ["</> div" :html] ["</>" :html] ["</> *" :html]
+                                ["+++" :front-matter] ["+++yaml" :front-matter] ["+++toml" :front-matter]
+                                ["+++ text" :front-matter] ["+++yaml text" :front-matter]
+                                [":-:c:-:r" :table] [":-:col" :table]]]
+        (check input expected))))
+  (testing "escape sequence handling"
+    (let [check-escape (fn [input text expected]
                          (let [ctx {:parse/input input}
-                               old (#'mdq/parse-selector ctx input)
-                               new (#'mdq/parse-selector-insta ctx input)]
-                           (is (= (boolean (#'mdq/text-matches? (:matcher old) "tab\there"))
-                                  (boolean (#'mdq/text-matches? (:matcher new) "tab\there")))
-                               (str input " - escape behavior mismatch"))))]
-      (check-escape "# \"tab\\there\"")
-      (check-escape "# \"new\\nline\"")
-      (check-escape "# \"\\u{2603}\"")))
+                               result (#'mdq/parse-selector-insta ctx input)]
+                           (is (= expected (boolean (#'mdq/text-matches? (:matcher result) text)))
+                               (str input " with '" text "'"))))]
+      (check-escape "# \"tab\\there\"" "tab\there" true)
+      (check-escape "# \"new\\nline\"" "new\nline" true)
+      (check-escape "# \"\\u{2603}\"" "\u2603" true)))
   (testing "pipeline equivalence"
     (let [md-text "# A\nfoo\n\n## B\nbar\n\n# C\nbaz"
           nodes (:content (md/parse md-text))]
@@ -580,15 +551,15 @@
              (mapv :type (#'mdq/walk-ast nodes)))))
     (testing "shared simple-filter handles link text and url matchers"
       (let [simple-filter #'mdq/simple-filter]
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "[](github)"} "[](github)") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector-insta {:parse/input "[](github)"} "[](github)") nodes)))
             "URL matcher should narrow link matches")
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "[Google]()"} "[Google]()") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector-insta {:parse/input "[Google]()"} "[Google]()") nodes)))
             "Text matcher should narrow link matches")))
     (testing "shared simple-filter handles code language and body matchers"
       (let [simple-filter #'mdq/simple-filter]
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "```clojure"} "```clojure") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector-insta {:parse/input "```clojure"} "```clojure") nodes)))
             "Language matcher should narrow code matches")
-        (is (= 1 (count (simple-filter (#'mdq/parse-selector {:parse/input "``` * (+ 1 2)"} "``` * (+ 1 2)") nodes)))
+        (is (= 1 (count (simple-filter (#'mdq/parse-selector-insta {:parse/input "``` * (+ 1 2)"} "``` * (+ 1 2)") nodes)))
             "Body matcher should narrow code matches")))))
 
 (deftest parse-args-test
@@ -783,13 +754,13 @@
 
 (deftest section-level-range-test
   (testing "section level range selectors"
-    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{2}"} "#{2}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector-insta {:parse/input "#{2}"} "#{2}")]
       (is (= [2 2] level-range)))
-    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{2,4}"} "#{2,4}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector-insta {:parse/input "#{2,4}"} "#{2,4}")]
       (is (= [2 4] level-range)))
-    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{2,}"} "#{2,}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector-insta {:parse/input "#{2,}"} "#{2,}")]
       (is (= [2 6] level-range)))
-    (let [{:keys [level-range]} (#'mdq/parse-selector {:parse/input "#{,3}"} "#{,3}")]
+    (let [{:keys [level-range]} (#'mdq/parse-selector-insta {:parse/input "#{,3}"} "#{,3}")]
       (is (= [1 3] level-range))))
   (testing "section level range filtering"
     (let [nodes (:content (md/parse "# H1\nA\n## H2\nB\n### H3\nC\n#### H4\nD"))]
@@ -799,11 +770,11 @@
 
 (deftest ordered-task-selector-test
   (testing "ordered task selectors"
-    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector {:parse/input "1. [x] done"} "1. [x] done")]
+    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector-insta {:parse/input "1. [x] done"} "1. [x] done")]
       (is (= :task type))
       (is (= :checked task-kind))
       (is (= :ordered list-kind)))
-    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector {:parse/input "1. [ ]"} "1. [ ]")]
+    (let [{:keys [type task-kind list-kind]} (#'mdq/parse-selector-insta {:parse/input "1. [ ]"} "1. [ ]")]
       (is (= :task type))
       (is (= :unchecked task-kind))
       (is (= :ordered list-kind)))))
