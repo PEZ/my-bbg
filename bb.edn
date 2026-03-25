@@ -1,5 +1,7 @@
 {:paths ["scripts" "scripts/mdq" "test"]
- :deps {org.babashka/cli {:mvn/version "0.2.23"}}
+ :deps {org.babashka/cli {:mvn/version "0.2.23"}
+        instaparse/instaparse {:git/url "https://github.com/Engelberg/instaparse"
+                               :git/sha "08a3580c9deab63727bfe11b1475d90d6147a3fe"}}
  :pods {org.babashka/fswatcher {:version "0.0.7"}}
  :tasks
  {:requires ([babashka.cli :as cli]

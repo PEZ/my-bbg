@@ -437,6 +437,80 @@
   (testing "paragraph"
     (is (= :paragraph (:type (#'mdq/parse-selector {:parse/input "P: hello"} "P: hello"))))))
 
+(deftest parse-selector-insta-equivalence-test
+  (testing "structural equivalence with existing parser"
+    (let [test-texts ["Hello World" "goodbye" "exact" "Introduction" "tab\there"]
+          check (fn [input]
+                  (let [ctx {:parse/input input}
+                        old (#'mdq/parse-selector ctx input)
+                        new (#'mdq/parse-selector-insta ctx input)
+                        compare-matcher (fn [old-m new-m]
+                                          (if (and old-m new-m)
+                                            (every? (fn [t]
+                                                      (= (boolean (#'mdq/text-matches? old-m t))
+                                                         (boolean (#'mdq/text-matches? new-m t))))
+                                                    test-texts)
+                                            (= (nil? old-m) (nil? new-m))))]
+                    (is (= (:type old) (:type new))
+                        (str input " - type mismatch"))
+                    (is (= (:level old) (:level new))
+                        (str input " - level mismatch"))
+                    (is (= (:level-range old) (:level-range new))
+                        (str input " - level-range mismatch"))
+                    (is (= (:task-kind old) (:task-kind new))
+                        (str input " - task-kind mismatch"))
+                    (is (= (:list-kind old) (:list-kind new))
+                        (str input " - list-kind mismatch"))
+                    (is (= (:format old) (:format new))
+                        (str input " - format mismatch"))
+                    (is (compare-matcher (:matcher old) (:matcher new))
+                        (str input " - matcher mismatch"))
+                    (is (compare-matcher (:url-matcher old) (:url-matcher new))
+                        (str input " - url-matcher mismatch"))
+                    (is (compare-matcher (:language-matcher old) (:language-matcher new))
+                        (str input " - language-matcher mismatch"))
+                    (is (compare-matcher (:col-matcher old) (:col-matcher new))
+                        (str input " - col-matcher mismatch"))
+                    (is (compare-matcher (:row-matcher old) (:row-matcher new))
+                        (str input " - row-matcher mismatch"))))]
+      (doseq [input ["#" "## hello" "### world" "# ^intro" "# api$" "# ^\"exact\"$"
+                     "# /hel+o/" "# !s/foo/bar/" "# *"
+                     "#{2,4} foo" "#{3}" "#{,4}" "#{3,}"
+                     "- hello" "-" "- *"
+                     "1. hello" "1." "1. *"
+                     "- [x] done" "- [ ] todo" "- [?]"
+                     "1. [x] done" "1. [ ] todo"
+                     "> hello" ">" "> *"
+                     "P: hello" "P:" "P: *"
+                     "```python hello" "``` hello" "```python" "```"
+                     "[text](url)" "[text]" "[](url)" "[]"
+                     "![alt](src)" "![alt]" "![](src)"
+                     "</> div" "</>" "</> *"
+                     "+++" "+++yaml" "+++toml" "+++ text" "+++yaml text"
+                     ":-:c:-:r" ":-:col"]]
+        (check input))))
+  (testing "escape sequence handling matches"
+    (let [check-escape (fn [input]
+                         (let [ctx {:parse/input input}
+                               old (#'mdq/parse-selector ctx input)
+                               new (#'mdq/parse-selector-insta ctx input)]
+                           (is (= (boolean (#'mdq/text-matches? (:matcher old) "tab\there"))
+                                  (boolean (#'mdq/text-matches? (:matcher new) "tab\there")))
+                               (str input " - escape behavior mismatch"))))]
+      (check-escape "# \"tab\\there\"")
+      (check-escape "# \"new\\nline\"")
+      (check-escape "# \"\\u{2603}\"")))
+  (testing "pipeline equivalence"
+    (let [md-text "# A\nfoo\n\n## B\nbar\n\n# C\nbaz"
+          nodes (:content (md/parse md-text))]
+      (doseq [pipeline ["# A" "## B" "# A | ## B" "# *" "#"]]
+        (is (= (#'mdq/emit-markdown (#'mdq/run-pipeline nodes pipeline))
+               (let [selectors (#'mdq/parse-pipeline-insta pipeline)]
+                 (#'mdq/emit-markdown
+                  (reduce (fn [n sel] ((#'mdq/selector->filter-fn sel) n))
+                          nodes selectors))))
+            (str "pipeline '" pipeline "' output mismatch"))))))
+
 (deftest list-filter-test
   (let [nodes (:content (md/parse "- foo\n- bar\n- baz"))]
     (testing "match by text"

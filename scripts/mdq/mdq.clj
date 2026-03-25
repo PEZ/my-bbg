@@ -4,6 +4,7 @@
             [clojure.set :as set]
             [clojure.string :as string]
             [clojure.walk :as walk]
+            [instaparse.core :as insta]
             [nextjournal.markdown :as md]))
 
 (defn- format-pest-error [{:keys [col end-col message input pointer-style]}]
@@ -532,6 +533,312 @@
   (let [s (string/trim s)]
     (validate-selector! ctx s)
     (parse-selector-dispatch ctx s)))
+
+;;; ============================================================
+;;; Instaparse-based parser (Phase 1: coexists with existing parser)
+;;; ============================================================
+
+(def ^:private segment-grammar
+  "selector = <ws?> (section-range / section / ordered-task / ordered-list
+                     / task / list-item / blockquote / paragraph / code-block
+                     / link / image / html / front-matter / table) <ws?>
+
+   section-range = <'#{'> range <'}'> (<ws> text-matcher)?
+   range         = #'\\d*,?\\d*'
+   section       = hashes (<ws> text-matcher)?
+   hashes        = #'#{1,6}'
+
+   ordered-task  = <'1.'> <ws> <'['> task-marker <']'> (<ws> text-matcher)?
+   task          = <'- ['> task-marker <']'> (<ws> text-matcher)?
+   task-marker   = 'x' | ' ' | '?'
+
+   ordered-list  = <'1.'> (<ws> text-matcher)?
+   list-item     = <'-'> (<ws> list-matcher)?
+   list-matcher  = !<'['> text-matcher
+
+   blockquote    = <'>'> (<ws> text-matcher)?
+   paragraph     = <'P:'> (<ws> text-matcher)?
+
+   code-block    = <'```'> cb-body?
+   cb-body       = cb-language (<ws> text-matcher)? / <ws> text-matcher
+   cb-language   = #'[a-zA-Z0-9_+-]+'
+
+   link          = <'['> link-text? <']'> (<'('> link-url? <')'>)?
+   image         = <'!['> link-text? <']'> (<'('> link-url? <')'>)?
+   link-text     = #'[^\\]]*'
+   link-url      = #'[^\\)]*'
+
+   html          = <'</>'> (<ws> text-matcher)?
+
+   front-matter  = <'+++'> fm-body?
+   fm-body       = fm-format (<ws> text-matcher)? / <ws> text-matcher
+   fm-format     = 'yaml' | 'toml'
+
+   table         = <':-:'> <ws?> table-text (<':-:'> <ws?> table-text?)?
+   table-text    = #'[^:-]+(?::[^-][^:-]*)*'
+
+   text-matcher    = wildcard / regex-replace / regex / anchored-text
+   wildcard        = '*'
+   regex-replace   = <'!s/'> regex-body <'/'> replacement (<'/'> | <epsilon>)
+   regex           = <'/'> regex-body <'/'>
+   regex-body      = #'[^/]+'
+   replacement     = #'[^/]*'
+
+   anchored-text   = anchor-start? (quoted / unquoted) anchor-end?
+   anchor-start    = <'^'>
+   anchor-end      = <'$'>
+   quoted          = double-quoted / single-quoted
+   double-quoted   = <'\"'> dq-content <'\"'>
+   single-quoted   = <\"'\"> sq-content <\"'\">
+   dq-content      = #'(?:[^\"\\\\]|\\\\.)*'
+   sq-content      = #\"(?:[^'\\\\\\\\]|\\\\\\\\.)*\"
+   unquoted        = !<'\"'> !<\"'\"> #'.*[^$]'
+   ws              = #'\\s+'")
+
+(def ^:private seg-parser (insta/parser segment-grammar))
+
+(defn- parse-range-str [range-str]
+  (let [[_ lo-str comma hi-str] (re-find #"^(\d*)(,?)(\d*)" range-str)
+        lo (when (seq lo-str) (parse-long lo-str))
+        hi (when (seq hi-str) (parse-long hi-str))
+        has-comma (= "," comma)]
+    (cond
+      (and lo (not has-comma)) [lo lo]
+      (and lo hi)              [lo hi]
+      (and lo has-comma)       [lo 6]
+      (and has-comma hi)       [1 hi]
+      :else                    nil)))
+
+(defn- find-tree-node [tree tag]
+  (when (vector? tree)
+    (if (= (first tree) tag)
+      tree
+      (some #(find-tree-node % tag) (rest tree)))))
+
+(defn- extract-quoted-spans [tree]
+  (when (vector? tree)
+    (let [tag (first tree)]
+      (if (#{:dq-content :sq-content} tag)
+        [{:tag tag :span (insta/span tree) :text (second tree)}]
+        (mapcat extract-quoted-spans (rest tree))))))
+
+(defn- find-quote-start-col [spans]
+  (when-let [{:keys [span]} (first spans)]
+    (inc (first span))))
+
+(def ^:private segment-transform
+  {:selector       (fn [inner] inner)
+   :section        (fn
+                     ([hashes-count] {:type :section
+                                      :level (when (> hashes-count 1) hashes-count)
+                                      :matcher nil})
+                     ([hashes-count matcher] {:type :section
+                                              :level (when (> hashes-count 1) hashes-count)
+                                              :matcher matcher}))
+   :hashes         count
+   :section-range  (fn
+                     ([range-str] {:type :section
+                                   :level-range (parse-range-str range-str)
+                                   :matcher nil})
+                     ([range-str matcher] {:type :section
+                                           :level-range (parse-range-str range-str)
+                                           :matcher matcher}))
+   :range          identity
+   :task           (fn
+                     ([task-kind] {:type :task :task-kind task-kind :matcher nil})
+                     ([task-kind matcher] {:type :task :task-kind task-kind :matcher matcher}))
+   :ordered-task   (fn
+                     ([task-kind] {:type :task :task-kind task-kind :list-kind :ordered :matcher nil})
+                     ([task-kind matcher] {:type :task :task-kind task-kind :list-kind :ordered :matcher matcher}))
+   :task-marker    (fn [m] (case m "x" :checked " " :unchecked "?" :any))
+   :ordered-list   (fn
+                     ([] {:type :list-item :list-kind :ordered :matcher nil})
+                     ([matcher] {:type :list-item :list-kind :ordered :matcher matcher}))
+   :list-item      (fn
+                     ([] {:type :list-item :list-kind :unordered :matcher nil})
+                     ([matcher] {:type :list-item :list-kind :unordered :matcher matcher}))
+   :list-matcher   identity
+   :blockquote     (fn
+                     ([] {:type :blockquote :matcher nil})
+                     ([matcher] {:type :blockquote :matcher matcher}))
+   :paragraph      (fn
+                     ([] {:type :paragraph :matcher nil})
+                     ([matcher] {:type :paragraph :matcher matcher}))
+   :code-block     (fn
+                     ([] {:type :code :language-matcher nil :matcher nil})
+                     ([cb-body] cb-body))
+   :cb-body        (fn
+                     ([lang-or-matcher]
+                      (if (string? lang-or-matcher)
+                        {:type :code :language-matcher {:raw lang-or-matcher} :matcher nil}
+                        {:type :code :language-matcher nil :matcher lang-or-matcher}))
+                     ([lang matcher]
+                      {:type :code :language-matcher {:raw lang} :matcher matcher}))
+   :cb-language    identity
+   :link           (fn
+                     ([] {:type :link :matcher nil :url-matcher nil})
+                     ([part]
+                      (case (:kind part)
+                        :link-url {:type :link :matcher nil :url-matcher (when (seq (:raw part)) part)}
+                        :link-text {:type :link :matcher nil :url-matcher nil}))
+                     ([link-text link-url]
+                      {:type :link
+                       :matcher (when (seq (:raw link-text)) link-text)
+                       :url-matcher (when (seq (:raw link-url)) link-url)}))
+   :image          (fn
+                     ([] {:type :image :matcher nil :url-matcher nil})
+                     ([part]
+                      (case (:kind part)
+                        :link-url {:type :image :matcher nil :url-matcher (when (seq (:raw part)) part)}
+                        :link-text {:type :image :matcher nil :url-matcher nil}))
+                     ([link-text link-url]
+                      {:type :image
+                       :matcher (when (seq (:raw link-text)) link-text)
+                       :url-matcher (when (seq (:raw link-url)) link-url)}))
+   :link-text      (fn [raw] {:raw raw :kind :link-text})
+   :link-url       (fn [raw] {:raw raw :kind :link-url})
+   :html           (fn
+                     ([] {:type :html :matcher nil})
+                     ([matcher] {:type :html :matcher matcher}))
+   :front-matter   (fn
+                     ([] {:type :front-matter :format nil :matcher nil})
+                     ([fm-body] fm-body))
+   :fm-body        (fn
+                     ([fmt-or-matcher]
+                      (if (keyword? fmt-or-matcher)
+                        {:type :front-matter :format fmt-or-matcher :matcher nil}
+                        {:type :front-matter :format nil :matcher fmt-or-matcher}))
+                     ([fmt matcher]
+                      {:type :front-matter :format fmt :matcher matcher}))
+   :fm-format      (fn [f] (keyword f))
+   :table          (fn
+                     ([col-text] {:type :table :col-matcher {:raw col-text} :row-matcher nil})
+                     ([col-text row-text] {:type :table :col-matcher {:raw col-text} :row-matcher {:raw row-text}}))
+   :table-text     identity
+   :text-matcher   identity
+   :wildcard       (fn [_] nil)
+   :regex          (fn [body] {:match-type :regex :pattern body})
+   :regex-replace  (fn [body replacement] {:match-type :regex-replace :pattern body :replacement replacement})
+   :regex-body     identity
+   :replacement    identity
+   :anchored-text  (fn [& args]
+                     (let [anchor-start (some #{:anchor-start} args)
+                           anchor-end   (some #{:anchor-end} args)
+                           text-data    (first (remove keyword? args))]
+                       (assoc text-data
+                              :anchored-start (boolean anchor-start)
+                              :anchored-end (boolean anchor-end))))
+   :anchor-start   (fn [] :anchor-start)
+   :anchor-end     (fn [] :anchor-end)
+   :quoted         identity
+   :double-quoted  (fn [raw-content] {:match-type :quoted :quote-style :double :raw-content raw-content})
+   :single-quoted  (fn [raw-content] {:match-type :quoted :quote-style :single :raw-content raw-content})
+   :dq-content     identity
+   :sq-content     identity
+   :unquoted       (fn [text] {:match-type :unquoted :text text})})
+
+(defn- resolve-text-matcher
+  [ctx matcher-data start-col]
+  (when matcher-data
+    (case (:match-type matcher-data)
+      :unquoted
+      (let [{:keys [text anchored-start anchored-end]} matcher-data]
+        (when (string/starts-with? text "<")
+          (throw-parse-error ctx start-col
+                             "expected end of input, \"*\", unquoted string, regex, quoted string, or \"^\""))
+        (build-unquoted-matcher text anchored-start anchored-end))
+
+      :quoted
+      (let [{:keys [raw-content anchored-start anchored-end]} matcher-data
+            inner (process-escape-sequences ctx raw-content start-col)]
+        (build-quoted-matcher inner anchored-start anchored-end))
+
+      :regex
+      (let [pattern (compile-matcher-regex ctx (:pattern matcher-data) (inc start-col))]
+        (fn [text] (some? (re-find pattern text))))
+
+      :regex-replace
+      (let [pattern (compile-matcher-regex ctx (:pattern matcher-data) (+ start-col 3))]
+        {:match-fn (fn [text] (re-find pattern text))
+         :replace {:pattern pattern
+                   :replacement (:replacement matcher-data)}})
+
+      nil)))
+
+(defn- resolve-selector-matchers [ctx selector raw-tree]
+  (let [spans (extract-quoted-spans raw-tree)
+        quote-col (find-quote-start-col spans)]
+    (case (:type selector)
+      (:section :blockquote :paragraph :html :front-matter :task :list-item)
+      (let [matcher-data (:matcher selector)
+            start-col (if (and matcher-data (= :quoted (:match-type matcher-data)))
+                        quote-col
+                        1)]
+        (assoc selector :matcher (resolve-text-matcher ctx matcher-data start-col)))
+
+      :code
+      (let [lang-data (:language-matcher selector)
+            matcher-data (:matcher selector)
+            lang-fn (when lang-data
+                      (resolve-text-matcher ctx {:match-type :unquoted
+                                                 :text (:raw lang-data)
+                                                 :anchored-start false
+                                                 :anchored-end false} 1))
+            matcher-fn (when matcher-data
+                         (let [start-col (if (= :quoted (:match-type matcher-data))
+                                           quote-col
+                                           1)]
+                           (resolve-text-matcher ctx matcher-data start-col)))]
+        (assoc selector
+               :language-matcher lang-fn
+               :matcher matcher-fn))
+
+      (:link :image)
+      (let [resolve-link-text (fn [raw-text col]
+                                (when raw-text
+                                  (let [trimmed (string/trim raw-text)]
+                                    (when (seq trimmed)
+                                      (parse-text-matcher ctx trimmed col)))))]
+        (assoc selector
+               :matcher (resolve-link-text (:raw (:matcher selector))
+                                           (if (= :link (:type selector)) 2 3))
+               :url-matcher (resolve-link-text (:raw (:url-matcher selector))
+                                               (some-> (find-tree-node raw-tree :link-url)
+                                                       insta/span first (+ 1)))))
+
+      :table
+      (let [col-raw (:raw (:col-matcher selector))
+            row-raw (:raw (:row-matcher selector))]
+        (assoc selector
+               :col-matcher (parse-text-matcher ctx col-raw)
+               :row-matcher (parse-text-matcher ctx row-raw)))
+
+      selector)))
+
+(defn- parse-selector-insta [ctx s]
+  (let [s (string/trim s)
+        raw-tree (insta/parse seg-parser s)]
+    (if (insta/failure? raw-tree)
+      (throw-parse-error ctx 1 "expected valid query")
+      (let [transformed (insta/transform segment-transform raw-tree)]
+        (resolve-selector-matchers ctx transformed raw-tree)))))
+
+(defn- parse-pipeline-insta [selector-str]
+  (let [parse-ctx {:parse/input selector-str}
+        segments (split-pipeline selector-str)]
+    (mapv (fn [{:keys [text offset]}]
+            (let [segment-ctx (assoc parse-ctx :parse/offset (dec offset))]
+              (try
+                (assoc (parse-selector-insta segment-ctx text) :offset offset)
+                (catch clojure.lang.ExceptionInfo e
+                  (let [{:keys [type col message]} (ex-data e)]
+                    (if (and (= :parse-error type)
+                             (> offset 1)
+                             (= col offset)
+                             (= message "expected valid query"))
+                      (throw-parse-error segment-ctx 1 "expected end of input or selector")
+                      (throw e)))))))
+          segments)))
 
 (defn- top-level-sections
   "Extract top-level sections: each heading starts a section, body extends
