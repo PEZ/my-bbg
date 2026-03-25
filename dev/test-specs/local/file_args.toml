@@ -1,0 +1,55 @@
+# Local override of md_cases/file_args.toml
+# Uses babashka.cli-native syntax: -o plain instead of -oplain
+
+[given]
+md = '''
+- from stdin
+'''
+files."one.txt" = '''
+- from one.txt
+'''
+files."two.txt" = '''
+- from two.txt
+'''
+
+[chained]
+needed = false
+
+[expect."read one file"]
+cli_args = ['-', '-o', 'plain', 'one.txt']
+output = '''
+from one.txt
+'''
+
+[expect."read two files"]
+cli_args = ['-', '-o', 'plain', 'one.txt', 'two.txt']
+output = '''
+from one.txt
+from two.txt
+'''
+
+[expect."read a file twice"]
+cli_args = ['-', '-o', 'plain', 'one.txt', 'one.txt']
+output = '''
+from one.txt
+from one.txt
+'''
+
+[expect."explicitly read stdin"]
+cli_args = ['-', '-o', 'plain', '-']
+output = '''
+from stdin
+'''
+
+[expect."explicitly read stdin twice"] # will only read it once!
+cli_args = ['-', '-o', 'plain', '-', '-']
+output = '''
+from stdin
+'''
+
+[expect."file is missing"]
+cli_args = ['-', '-o', 'plain', 'missing-err.txt']
+expect_success = false
+output = ''
+output_err = '''entity not found while reading file "missing-err.txt"
+'''

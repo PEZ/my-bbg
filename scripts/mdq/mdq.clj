@@ -2346,74 +2346,51 @@
                  (all-flags (first (string/split flag #"=" 2))))
         0))))
 
-(defn- string-aliases
-  "Extract single-char aliases that take string values from cli-spec."
-  []
-  (->> (:spec cli-spec)
-       (keep (fn [[_k {:keys [alias coerce]}]]
-               (when (and alias (not= coerce :boolean))
-                 (str (name alias)))))
-       set))
-
 (defn- prepare-args
-  "Normalize args for babashka.cli:
-   - Expand compound short options (-oplain -> -o plain, -qh -> -q -h)
-   - Separate flags from positionals, emit flags first then -- then positionals"
+  "Reorder args: known flags first, then -- then positionals.
+   Prevents bare dashes and dash-space selectors from confusing babashka.cli."
   [args]
-  (let [str-aliases (string-aliases)
-        expanded (loop [remaining (seq args)
-                        result []]
-                   (if-not remaining
-                     result
-                     (let [arg (first remaining)]
-                       (cond
-                         (= "--" arg)
-                         (into (conj result arg) (rest remaining))
+  (loop [remaining (seq args)
+         flags []
+         positionals []]
+    (if-not remaining
+      (if (seq positionals)
+        (into flags (cons "--" positionals))
+        flags)
+      (let [arg (first remaining)
+            arity (flag-arity arg)]
+        (cond
+          (= "--" arg)
+          (let [rest-args (into positionals (rest remaining))]
+            (if (seq rest-args)
+              (into flags (cons "--" rest-args))
+              flags))
 
-                         (and (re-matches #"-[a-zA-Z].+" arg)
-                              (not (string/starts-with? arg "--")))
-                         (let [letter (subs arg 1 2)
-                               rest-str (subs arg 2)]
-                           (if (str-aliases letter)
-                             (recur (next remaining)
-                                    (conj result (str "-" letter) rest-str))
-                             (recur (next remaining)
-                                    (into result (mapv #(str "-" %) (seq (subs arg 1)))))))
+          ;; --flag=value (arity 0, value embedded)
+          (and (string/starts-with? arg "--")
+               (string/includes? arg "=")
+               (some? (flag-arity arg)))
+          (recur (next remaining) (conj flags arg) positionals)
 
-                         :else
-                         (recur (next remaining) (conj result arg))))))
-        [flags positionals]
-        (loop [remaining (seq expanded)
-               flags []
-               positionals []]
-          (if-not remaining
-            [flags positionals]
-            (let [arg (first remaining)
-                  arity (flag-arity arg)]
-              (cond
-                (= "--" arg)
-                [flags (into positionals (rest remaining))]
+          ;; Flag that takes a value argument
+          (and arity (pos? arity))
+          (recur (nnext remaining)
+                 (conj flags arg (second remaining))
+                 positionals)
 
-                (and arity (pos? arity))
-                (recur (nnext remaining)
-                       (conj flags arg (second remaining))
-                       positionals)
+          ;; Boolean flag (may have explicit true/false)
+          (some? arity)
+          (let [nxt (second remaining)]
+            (if (#{"true" "false"} nxt)
+              (recur (nnext remaining)
+                     (conj flags arg nxt)
+                     positionals)
+              (recur (next remaining)
+                     (conj flags arg)
+                     positionals)))
 
-                (some? arity)
-                (let [nxt (second remaining)]
-                  (if (#{"true" "false"} nxt)
-                    (recur (nnext remaining)
-                           (conj flags arg nxt)
-                           positionals)
-                    (recur (next remaining)
-                           (conj flags arg)
-                           positionals)))
-
-                :else
-                (recur (next remaining) flags (conj positionals arg))))))]
-    (if (seq positionals)
-      (into flags (cons "--" positionals))
-      flags)))
+          :else
+          (recur (next remaining) flags (conj positionals arg)))))))
 
 (defn- parse-args [args]
   (let [{:keys [opts args]} (cli/parse-args (prepare-args args) cli-spec)

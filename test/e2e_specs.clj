@@ -25,16 +25,25 @@
   (str (fs/relativize specs-root-dir spec-path)))
 
 (defn- spec-files
+  "List spec files. Local specs override upstream specs with the same filename."
   []
-  (->> [upstream-cache-dir local-specs-dir]
-       (filter fs/directory?)
-       (mapcat #(fs/glob % "*.toml"))
-       (map (fn [path]
-              {:label (spec-path->label path)
-               :name (str (fs/file-name path))
-               :path path}))
-       (sort-by :label)
-       vec))
+  (let [all (->> [upstream-cache-dir local-specs-dir]
+                 (filter fs/directory?)
+                 (mapcat #(fs/glob % "*.toml"))
+                 (map (fn [path]
+                        {:label (spec-path->label path)
+                         :name (str (fs/file-name path))
+                         :path path})))
+        local-names (->> all
+                         (filter #(str/starts-with? (:label %) "local/"))
+                         (map :name)
+                         set)]
+    (->> all
+         (remove (fn [{:keys [label name]}]
+                   (and (not (str/starts-with? label "local/"))
+                        (local-names name))))
+         (sort-by :label)
+         vec)))
 
 (defn- matching-spec-files
   [spec-file]
