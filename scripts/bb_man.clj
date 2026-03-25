@@ -278,4 +278,7 @@
   (-> (p/shell {:out :string} "/tmp/bbg/bb" "--version")
       :out str/trim)
 
+  (-> (p/shell {:out :string} "bb" "--version")
+        :out str/trim)
+
   :rcf)

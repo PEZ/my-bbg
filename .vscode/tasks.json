@@ -9,8 +9,6 @@
       "problemMatcher": [],
       "presentation": {
         "reveal": "silent",
-        "panel": "dedicated",
-        "group": "dev"
       }
     },
     {
