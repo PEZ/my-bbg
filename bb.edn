@@ -3,6 +3,7 @@
  :pods {org.babashka/fswatcher {:version "0.0.7"}}
  :tasks
  {:requires ([babashka.cli :as cli]
+             bb-man
              config-save
              deps-clj-as-clojure
              java-version
@@ -15,6 +16,10 @@
 
   loc {:doc "Count lines of code (excludes generated files, markdown, vendor)"
        :task (loc/count! {:cwd cwd})}
+
+  bb {:doc "Manage bb binary [--download <ref> | --use <ref> | --unuse]"
+      :task (bb-man/exec! (cli/parse-opts *command-line-args*
+                                          bb-man/cli-spec))}
 
   clj {:doc "Manage clojure installs"
        :task (deps-clj-as-clojure/exec! (cli/parse-opts *command-line-args*
@@ -58,7 +63,8 @@
                                   ["scripts" "test"]
                                   {:extensions [".clj"]})}
 
-  -task-options {:task (let [task-specs {"clj"      deps-clj-as-clojure/cli-spec
+  -task-options {:task (let [task-specs {"bb"       bb-man/cli-spec
+                                         "clj"      deps-clj-as-clojure/cli-spec
                                          "config"   config-save/cli-spec
                                          "java"     java-version/cli-spec
                                          "mdq"      mdq/cli-spec

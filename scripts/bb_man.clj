@@ -7,9 +7,54 @@
 
 ;; --- Config ---
 
+
+
+
+
+;; --- Gather (impure but safe) ---
+
+
+
+
+
+
+
+
+
+
+
+;; --- Transform (pure) ---
+
+
+
+
+
+;; --- Validate & Resolve ---
+
+
+
+;; --- Find runs & artifacts ---
+
+
+
+
+
+
+
+
+
+;; --- Act (side effects) ---
+
+
+
+
+
+;; --- Config ---
+
 (def ^:private bb-repo "babashka/babashka")
 (def ^:private bb-api (str "https://api.github.com/repos/" bb-repo))
 (def ^:private build-workflow-id 900192)
+(def ^:private home-bb (str (fs/home) "/bin/bb"))
 
 ;; --- Gather (impure but safe) ---
 
@@ -38,6 +83,24 @@
     (when (<= 200 (:status resp) 299)
       (json/parse-string (:body resp) true))))
 
+(defn- bb-version [bb-path]
+  (-> (p/shell {:out :string} bb-path "--version") :out str/trim))
+
+(defn- latest-release []
+  (gh-get (str bb-api "/releases/latest")))
+
+(defn- latest-release-tag []
+  (:tag_name (latest-release)))
+
+(defn- system-bb-path []
+  (let [home-bin (str (fs/home) "/bin")
+        path-dirs (str/split (System/getenv "PATH") #":")
+        non-home-dirs (remove #{home-bin} path-dirs)]
+    (->> non-home-dirs
+         (some (fn [dir]
+                 (let [candidate (str dir "/bb")]
+                   (when (fs/exists? candidate) candidate)))))))
+
 (defn find-workflow-id
   "Looks up a workflow ID by its .yml path (e.g. \".github/workflows/build.yml\")."
   [workflow-path]
@@ -47,16 +110,14 @@
        first
        :id))
 
-(comment
-  (find-workflow-id ".github/workflows/build.yml")
-  :rcf)
-
 ;; --- Transform (pure) ---
 
 (defn classify-ref
-  "Classifies a git ref string into {:type :pr/:sha/:branch-or-tag ...}."
+  "Classifies a git ref string into {:type ...}.
+   Recognizes :latest, :pr, :sha, and :branch-or-tag."
   [ref]
   (cond
+    (= ref "latest") {:type :latest}
     (re-matches #"#\d+" ref) {:type :pr :number (subs ref 1)}
     (re-matches #"\d+" ref) {:type :pr :number ref}
     (re-matches #"[0-9a-f]{7,40}" ref) {:type :sha :sha ref}
@@ -75,6 +136,9 @@
   [ref]
   (let [{:keys [type] :as classified} (classify-ref ref)]
     (case type
+      :latest
+      (resolve-ref (latest-release-tag))
+
       :pr
       (if-let [pr-data (gh-get-safe (str bb-api "/pulls/" (:number classified)))]
         {:sha (get-in pr-data [:head :sha])
@@ -173,33 +237,103 @@
       (when (and (zero? exit) (fs/exists? bb-path))
         (str bb-path)))))
 
-(comment
+;; --- Task operations ---
 
+(defn- status! []
+  (let [has-home-bb (fs/exists? home-bb)
+        which-bb (str (fs/which "bb"))
+        system-bb (system-bb-path)
+        home-bb-active? (and has-home-bb (= which-bb home-bb))
+        latest (latest-release)
+        master-sha (-> (resolve-ref "master") :sha (subs 0 12))]
+    (println "bb status:")
+    (println (str "  Active:    " (bb-version which-bb) " (" which-bb ")"))
+    (when (and has-home-bb (not home-bb-active?))
+      (println (str "  ~/bin/bb:  " (bb-version home-bb) " (shadowed by " which-bb ")")))
+    (when home-bb-active?
+      (println (str "  System:    " (bb-version system-bb) " (" system-bb ")")))
+    (println (str "  Latest:    " (:tag_name latest)))
+    (println (str "  Master:    " master-sha))))
+
+(defn- download! [ref]
+  (println (str "Downloading bb for ref '" ref "'..."))
+  (let [path (download-bb! ref)]
+    (if path
+      (do (println (str "Downloaded to: " path))
+          (println (str "  Version: " (bb-version path)))
+          path)
+      (do (println "Download failed.")
+          nil))))
+
+(defn- use! [ref]
+  (let [downloaded (download! ref)]
+    (when downloaded
+      (fs/create-dirs (str (fs/home) "/bin"))
+      (fs/copy downloaded home-bb {:replace-existing true})
+      (fs/set-posix-file-permissions home-bb "rwxr-xr-x")
+      (println (str "Installed to: " home-bb))
+      (println (str "  Version: " (bb-version home-bb)))
+      home-bb)))
+
+(defn- unuse! []
+  (if (fs/exists? home-bb)
+    (let [dest "/tmp/bbg/uninstalled-bb"]
+      (fs/create-dirs "/tmp/bbg")
+      (fs/delete-if-exists dest)
+      (fs/move home-bb dest)
+      (println (str "Moved " home-bb " to " dest))
+      (println (str "System bb is now active: " (fs/which "bb")))
+      dest)
+    (do (println (str "No bb found at " home-bb " — nothing to uninstall."))
+        nil)))
+
+;; --- CLI ---
+
+(def cli-spec
+  {:coerce {:download :string
+            :use :string
+            :unuse :boolean}})
+
+(defn exec! [{:keys [download use unuse]}]
+  (cond
+    download (download! download)
+    use      (use! use)
+    unuse    (unuse!))
+  (status!))
+
+(comment
   ;; Classify refs (pure, no API calls)
+  (classify-ref "latest")
   (classify-ref "master")
   (classify-ref "v1.12.217")
   (classify-ref "44d1c0dd")
   (classify-ref "#1958")
 
   ;; Validate & resolve refs
+  (resolve-ref "latest")
   (resolve-ref "master")
   (resolve-ref "v1.12.217")
   (resolve-ref "#1958")
   (try (resolve-ref "nonexistent-xyz")
        (catch Exception e (ex-message e)))
 
-  ;; Find artifact info for various ref types
+  ;; Find artifact info
+  (find-macos-silicon-artifact "latest")
   (find-macos-silicon-artifact "master")
   (find-macos-silicon-artifact "v1.12.217")
-  (find-macos-silicon-artifact "44d1c0dd")
-  (find-macos-silicon-artifact "#1958")
+
+  ;; Look up workflow IDs by path
+  (find-workflow-id ".github/workflows/build.yml")
+
+  ;; Task operations
+  (exec! {})
+  (exec! {:download "latest"})
+  (exec! {:use "latest"})
+  (exec! {:unuse true})
 
   ;; Download to /tmp/bbg/
+  (download-bb! "latest")
   (download-bb! "master")
-  (download-bb! "v1.12.217")
-  (download-bb! "44d1c0dd")
-  (download-bb! "deadbeef")
-  (download-bb! "#1958")
 
   ;; Verify downloaded binary
   (-> (p/shell {:out :string} "/tmp/bbg/bb" "--version")
