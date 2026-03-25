@@ -246,14 +246,12 @@
   (status!))
 
 (comment
-  ;; Classify refs (pure, no API calls)
   (classify-ref "latest")
   (classify-ref "master")
   (classify-ref "v1.12.217")
   (classify-ref "44d1c0dd")
   (classify-ref "#1958")
 
-  ;; Validate & resolve refs
   (resolve-ref "latest")
   (resolve-ref "master")
   (resolve-ref "v1.12.217")
@@ -266,16 +264,13 @@
   (find-macos-silicon-artifact "master")
   (find-macos-silicon-artifact "v1.12.217")
 
-  ;; Look up workflow IDs by path
   (find-workflow-id ".github/workflows/build.yml")
 
-  ;; Task operations
   (exec! {})
   (exec! {:download "latest"})
   (exec! {:use "latest"})
   (exec! {:unuse true})
 
-  ;; Download to /tmp/bbg/
   (download-bb! "latest")
   (download-bb! "master")
 
