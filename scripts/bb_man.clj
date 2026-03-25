@@ -237,19 +237,22 @@
       (when (and (zero? exit) (fs/exists? bb-path))
         (str bb-path)))))
 
+(defn- which-bb []
+  (-> (p/shell {:out :string} "which" "bb") :out str/trim))
+
 ;; --- Task operations ---
 
 (defn- status! []
   (let [has-home-bb (fs/exists? home-bb)
-        which-bb (str (fs/which "bb"))
+        active-bb (which-bb)
         system-bb (system-bb-path)
-        home-bb-active? (and has-home-bb (= which-bb home-bb))
+        home-bb-active? (and has-home-bb (= active-bb home-bb))
         latest (latest-release)
         master-sha (-> (resolve-ref "master") :sha (subs 0 12))]
     (println "bb status:")
-    (println (str "  Active:    " (bb-version which-bb) " (" which-bb ")"))
+    (println (str "  Active:    " (bb-version active-bb) " (" active-bb ")"))
     (when (and has-home-bb (not home-bb-active?))
-      (println (str "  ~/bin/bb:  " (bb-version home-bb) " (shadowed by " which-bb ")")))
+      (println (str "  ~/bin/bb:  " (bb-version home-bb) " (not on PATH, shadowed by " active-bb ")")))
     (when home-bb-active?
       (println (str "  System:    " (bb-version system-bb) " (" system-bb ")")))
     (println (str "  Latest:    " (:tag_name latest)))
