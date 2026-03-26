@@ -47,7 +47,7 @@ The tasks here are personal utilities — they may or may not be useful to anyon
 | Task | What it does | Notes |
 |------|-------------|-------|
 | `mdq` | Query/transform Markdown documents (jq for Markdown, faithful port of [mdq](https://github.com/yshavit/mdq)) | `bb` needs to be from commit `44d1c0d` or later (`bbg bb` shows status) |
-| `bb` | Manage Babashka binaries — download, switch between versions | |
+| `bb` | Manage Babashka binaries — download, switch between versions | Relies on `gh` |
 | `clj` | Switch between deps-clj and Homebrew Clojure installations | |
 | `java` | Get help with switching beteen Java mejor versions via SDKMAN | |
 | `config` | Commit and push dotfile/config repos | |
@@ -77,6 +77,16 @@ Since bbg uses `babashka.cli` for argument parsing, there are a few CLI-level di
 - **Dash-selectors need `--`**: Queries starting with `-` are misinterpreted as flags. Use `bbg mdq -- - list item` instead of `bbg mdq '- list item'`.
 - **Space-separated flags**: `-o plain`, no support for `-oplain`.
 - **Flags before positionals**: Flags placed after positional arguments leak into `:args`.
+
+## bb
+
+Meta... It makes it easy to switch to latest or some particular version of `bb`. Or to latest from `master`, or even to a version as built form a PR. Created because to make the `mdq` use Instaparse, I needed a yet to be released version of `bb`:
+
+```sh
+bbg bb master
+```
+
+And just `bbg bb` gives you status of what you are using and what is available.
 
 ## Development
 
