@@ -1,0 +1,81 @@
+# Local override of md_cases/matchers.toml
+# Adds -- before dash-selectors for babashka.cli compatibility
+# (babashka.cli misparses '- foo' as flags; may be fixed in future)
+
+[given]
+md = '''
+- hello world
+- the world is my oyster
+- worldly possessions
+- lorem ipsum dolor sit amet.
+'''
+
+[chained]
+needed = false
+
+[expect."bareword"]
+cli_args = ['--', '- world ']
+output = '''
+- hello world
+
+   -----
+
+- the world is my oyster
+
+   -----
+
+- worldly possessions
+'''
+
+
+[expect."bareword with start anchor"]
+cli_args = ['--', '- ^world']
+output = '''
+- worldly possessions
+'''
+
+
+[expect."bareword with end anchor"]
+cli_args = ['--', '- world$']
+output = '''
+- hello world
+'''
+
+
+[expect."quoted"]
+cli_args = ['--', '- "world "']
+output = '''
+- the world is my oyster
+'''
+
+
+[expect."quoted with anchor"]
+cli_args = ['--', '- "world "$']
+output = ''
+expect_success = false
+
+
+[expect."regex"]
+cli_args = ['--', '- /wor.d$/']
+output = '''
+- hello world
+'''
+
+
+[expect."bareword is case-insensitive"]
+cli_args = ['--', '- OYSTER']
+output = '''
+- the world is my oyster
+'''
+
+
+[expect."quoted is case-sensitive"]
+cli_args = ['--', '- "OYSTER"']
+output = ''
+expect_success = false
+
+
+[expect."regex is case-sensitive"]
+cli_args = ['--', '- /OYSTER/']
+output = ''
+expect_success = false

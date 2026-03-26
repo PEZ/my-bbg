@@ -1,10 +1,12 @@
 (ns mdq
-  (:require [cheshire.core :as json]
-            [clojure.pprint :as pp]
-            [clojure.set :as set]
-            [clojure.string :as string]
-            [clojure.walk :as walk]
-            [nextjournal.markdown :as md]))
+  (:require
+   [babashka.cli :as cli]
+   [cheshire.core :as json]
+   [clojure.pprint :as pp]
+   [clojure.set :as set]
+   [clojure.string :as string]
+   [clojure.walk :as walk]
+   [nextjournal.markdown :as md]))
 
 (defn- format-pest-error [{:keys [col end-col message input pointer-style]}]
   (let [col (or col 1)
@@ -2180,94 +2182,54 @@
   [text width]
   (string/join "\n" (map #(wrap-line % width) (string/split text #"\n" -1))))
 
-(defn- parse-equals-flag-args
-  "Parse --flag=value syntax, returns updated opts or nil"
-  [arg opts]
-  (when-let [eq-idx (string/index-of arg "=")]
-    (let [flag (subs arg 0 eq-idx)
-          value (subs arg (inc eq-idx))]
-      (case flag
-        "--output" (assoc opts :output value)
-        "--link-format" (assoc opts :link-format value)
-        ("--link-placement" "--link-pos") (assoc opts :link-placement value)
-        "--renumber-footnotes" (assoc opts :renumber-footnotes (not= value "false"))
-        "--wrap-width" (assoc opts :wrap-width (parse-long value))
-        "--cwd" (assoc opts :cwd value)
-        nil))))
+(def ^:export cli-spec
+  "CLI spec: single source of truth for arg parsing, help, and shell completions."
+  {:spec
+   {:output {:coerce :string :alias :o :ref "<format>"
+             :desc "Output format: markdown (default), json, edn, plain"}
+    :quiet {:coerce :boolean :alias :q
+            :desc "Exit 0 if found, non-0 otherwise (no output)"}
+    :br {:coerce :boolean
+         :desc "Use blank lines between plain-text blocks"}
+    :no-br {:coerce :boolean
+            :desc "Omit markdown result separators"}
+    :link-format {:coerce :string :ref "<format>"
+                  :desc "Link format: never-inline (default), inline, keep, reference"}
+    :link-placement {:coerce :string :ref "<placement>"
+                     :desc "Link placement: section (default), doc"}
+    :link-pos {:coerce :string :ref "<placement>"
+               :desc "Alias for --link-placement"}
+    :renumber-footnotes {:coerce :boolean
+                         :desc "Renumber footnotes (default true; false preserves labels)"}
+    :wrap-width {:coerce :long :ref "<cols>"
+                 :desc "Wrap output to the given column width"}
+    :cwd {:coerce :string :ref "<path>"
+          :desc "Working directory for file resolution"}
+    :help {:coerce :boolean :alias :h
+           :desc "Show this help"}}
+   :args->opts (cons :selector (repeat :files))
+   :coerce {:selector :string :files []}
+   :no-keyword-opts true
+   :order [:output :quiet :br :no-br :link-format :link-placement
+           :link-pos :renumber-footnotes :wrap-width :help]})
 
 (defn- parse-args [args]
-  (loop [remaining (seq args)
-         opts {}
-         selector nil
-         files []]
-    (if-not remaining
-      (cond-> opts
-        selector (assoc :selector selector)
-        (seq files) (assoc :files files))
-      (let [arg (first remaining)]
-        (cond
-          (= "--" arg)
-          (let [rest-args (vec (rest remaining))]
-            (cond-> opts
-              (and (not selector) (seq rest-args))
-              (assoc :selector (first rest-args))
-              (and (not selector) (> (count rest-args) 1))
-              (assoc :files (into files (rest rest-args)))
-              (and selector (seq rest-args))
-              (assoc :files (into files rest-args))))
+  (let [{:keys [opts args]} (cli/parse-args args cli-spec)
+        opts (if-let [v (:link-pos opts)]
+               (-> opts (dissoc :link-pos) (assoc :link-placement v))
+               opts)
+        opts (if (seq args)
+               (if (:selector opts)
+                 (update opts :files (fnil into []) args)
+                 (cond-> (assoc opts :selector (first args))
+                   (next args) (assoc :files (vec (rest args)))))
+               opts)]
+    opts))
 
-          (or (= "-o" arg) (= "--output" arg))
-          (recur (nnext remaining) (assoc opts :output (second remaining)) selector files)
-
-          (or (= "-q" arg) (= "--quiet" arg))
-          (recur (next remaining) (assoc opts :quiet true) selector files)
-
-          (= "--no-br" arg)
-          (recur (next remaining) (assoc opts :no-br true) selector files)
-
-          (= "--br" arg)
-          (recur (next remaining) (assoc opts :br true) selector files)
-
-          (or (= "-h" arg) (= "--help" arg))
-          (recur (next remaining) (assoc opts :help true) selector files)
-
-          (= "--link-format" arg)
-          (recur (nnext remaining) (assoc opts :link-format (second remaining)) selector files)
-
-          (contains? #{"--link-placement" "--link-pos"} arg)
-          (recur (nnext remaining) (assoc opts :link-placement (second remaining)) selector files)
-
-          (= "--renumber-footnotes" arg)
-          (recur (nnext remaining) (assoc opts :renumber-footnotes (not= (second remaining) "false")) selector files)
-
-          (= "--wrap-width" arg)
-          (recur (nnext remaining) (assoc opts :wrap-width (parse-long (second remaining))) selector files)
-
-          (= "--cwd" arg)
-          (recur (nnext remaining) (assoc opts :cwd (second remaining)) selector files)
-
-          (string/starts-with? arg "--")
-          (if-let [new-opts (parse-equals-flag-args arg opts)]
-            (recur (next remaining) new-opts selector files)
-            (recur (next remaining) opts selector files))
-
-          ;; Compound short options: -oFORMAT
-          (and (string/starts-with? arg "-")
-               (not= arg "-")
-               (> (count arg) 2)
-               (not (string/starts-with? arg "--")))
-          (let [flag-char (subs arg 1 2)
-                value (subs arg 2)]
-            (case flag-char
-              "o" (recur (next remaining) (assoc opts :output value) selector files)
-              (if selector
-                (recur (next remaining) opts selector (conj files arg))
-                (recur (next remaining) opts arg files))))
-
-          :else
-          (if selector
-            (recur (next remaining) opts selector (conj files arg))
-            (recur (next remaining) opts arg files)))))))
+(defn- help-text []
+  (str "Usage: bbg mdq [options] '<selector>' [file ...]\n\n"
+       "Options:\n"
+       (cli/format-opts cli-spec)))
 
 (defn- process
   "Processes markdown input with given args. Returns a map with:
@@ -2277,18 +2239,7 @@
   [input args]
   (let [opts (parse-args args)]
     (if (:help opts)
-      {:output (str "Usage: bbg mdq [options] '<selector>' [file ...]\n\n"
-                    "Options:\n"
-                    "  -o, --output FORMAT           Output format: markdown (default), json, edn, plain\n"
-                    "  --link-format FORMAT          Link format: never-inline (default), inline, keep, reference\n"
-                    "  --link-placement PLACE        Link placement: section (default), doc\n"
-                    "  --link-pos PLACE              Alias for --link-placement\n"
-                    "  --wrap-width COLS             Wrap output to the given column width\n"
-                    "  --renumber-footnotes BOOL     Renumber footnotes (default true; false preserves labels)\n"
-                    "  --br                          Use blank lines between plain-text blocks\n"
-                    "  --no-br                       Omit markdown result separators\n"
-                    "  -q, --quiet                   Exit 0 if found, non-0 otherwise (no output)\n"
-                    "  -h, --help                    Show this help")
+      {:output (help-text)
        :exit 0}
       (let [selector (:selector opts)]
         (try
@@ -2357,19 +2308,6 @@
 
       :else
       (process (read-stdin) args))))
-
-(def ^:export cli-spec
-  "CLI spec for shell completions. mdq uses custom arg parsing."
-  {:coerce {:output :string
-            :link-format :string
-            :link-placement :string
-            :link-pos :string
-            :renumber-footnotes :boolean
-            :wrap-width :int
-            :quiet :boolean
-            :br :boolean
-            :no-br :boolean
-            :help :boolean}})
 
 (defn ^:export exec! [args]
   (let [opts (parse-args args)

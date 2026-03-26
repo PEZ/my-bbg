@@ -1,0 +1,91 @@
+# Local override of md_cases/select_lists.toml
+# Adds -- before dash-selectors for babashka.cli compatibility
+# (babashka.cli misparses '- foo' as flags; may be fixed in future)
+
+[given]
+md = '''
+# Ordered
+
+2. two (note: starting count at 2!)
+3. three
+
+# Unordered
+
+- a point
+- another point
+
+# Tasks
+
+- [ ] an incomplete task
+- [x] a completed task
+
+1. [ ] ordered tasks are possible, too
+'''
+
+
+[expect."select ordered"]
+cli_args = ['1.']
+output = '''
+2. two (note: starting count at 2!)
+
+   -----
+
+3. three
+'''
+
+
+[expect."select unordered"]
+cli_args = ['--', '-']
+output = '''
+- a point
+
+   -----
+
+- another point
+'''
+
+
+[expect."select all ordered tasks"]
+cli_args = ['--', '- [?]']
+output = '''
+- [ ] an incomplete task
+
+   -----
+
+- [x] a completed task
+'''
+
+
+[expect."select ordered task by text"]
+cli_args = ['--', '- [?] incomplete']
+output = '''
+- [ ] an incomplete task
+'''
+
+
+[expect."select incomplete ordered tasks"]
+cli_args = ['--', '- [ ]']
+output = '''
+- [ ] an incomplete task
+'''
+
+
+[expect."select completed ordered tasks"]
+cli_args = ['--', '- [x]']
+output = '''
+- [x] a completed task
+'''
+
+
+[expect."select unordered tasks"]
+cli_args = ['1. [?]']
+output = '''
+1. [ ] ordered tasks are possible, too
+'''
+
+
+[expect."chained"]
+cli_args = ['--', '- a point | - a point']
+output = '''
+- a point
+'''
