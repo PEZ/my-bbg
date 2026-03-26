@@ -90,7 +90,7 @@ And just `bbg bb` gives you status of what you are using and what is available.
 
 ## Development
 
-The project uses a VS Code multi-root workspace with `~/bin` and `~/.config/bbg`. The default build task starts an nREPL server and both test watchers.
+The default build task starts a Babashka nREPL server and both test watchers.
 
 ### Testing
 
