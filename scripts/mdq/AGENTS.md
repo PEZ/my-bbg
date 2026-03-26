@@ -1,183 +1,60 @@
-# mdq Maintenance Guide
+# mdq — Agent Guide
 
-Query tool for Markdown documents. Selector DSL maps markdown syntax to filter operations, chained with `|`.
+Babashka implementation of [mdq](https://github.com/yshavit/mdq) (jq for Markdown), written to the [mdq spec](https://github.com/yshavit/mdq/tree/main/tests/md_cases). Behavior should match the Rust reference unless documented otherwise in `dev/test-specs/local/`.
 
-## Pipeline
+## Architecture
 
 ```
 stdin → pre-process-front-matter → md/parse → [parse-selector → filter]* → apply-replacements → emit
 ```
 
-1. **Extract** front matter (YAML/TOML) into synthetic `:front-matter` node
-2. **Parse** markdown to AST via `nextjournal.markdown`
-3. **Filter** through chained selectors (`reduce` over `[nodes] → [nodes]` functions)
-4. **Replace** text nodes if any selector had `!s/pattern/replacement/`
-5. **Emit** as markdown, JSON, or EDN
+- **Parsing**: [Instaparse](https://github.com/Engelberg/instaparse) grammar for selectors, `nextjournal.markdown` for the document AST
+- **Pipeline**: `run-pipeline` reduces parsed selectors over `[nodes] → [nodes]` filter functions
+- **Output**: Markdown (default), plain text, JSON (`cheshire`), or EDN
 
-Core orchestrator: `run-pipeline` chains parsed selectors via `reduce`, then calls `apply-replacements`.
+Entry point: `exec!` in `mdq.clj`.
 
-## Selector Reference
+## Key Strategies
 
-| Syntax | `:type` | Filter fn | Extra keys |
-|--------|---------|-----------|------------|
-| `# text`, `## text` | `:section` | `section-filter` | `:level`, `:matcher` |
-| `- text` | `:list-item` | `list-filter` | `:list-kind :unordered`, `:matcher` |
-| `1. text` | `:list-item` | `list-filter` | `:list-kind :ordered`, `:matcher` |
-| `- [ ] text` | `:task` | `task-filter` | `:task-kind :unchecked`, `:matcher` |
-| `- [x] text` | `:task` | `task-filter` | `:task-kind :checked`, `:matcher` |
-| `- [?] text` | `:task` | `task-filter` | `:task-kind :any`, `:matcher` |
-| `> text` | `:blockquote` | `blockquote-filter` | `:matcher` |
-| `` ```lang text `` | `:code` | `code-filter` | `:language-matcher`, `:matcher` |
-| `P: text` | `:paragraph` | `paragraph-filter` | `:matcher` |
-| `[text](url)` | `:link` | `link-filter` | `:matcher`, `:url-matcher` |
-| `![alt](src)` | `:image` | `image-filter` | `:matcher`, `:url-matcher` |
-| `</> text` | `:html` | `html-filter` | `:matcher` |
-| `+++`, `+++yaml`, `+++toml` | `:front-matter` | `front-matter-filter` | `:format`, `:matcher` |
-| `:-: col :-: row` | `:table` | `table-filter` | `:col-matcher`, `:row-matcher` |
+- **Selectors mirror markdown syntax** — `# heading`, `- item`, `` ```lang ``, `[text](url)`, etc. Refer to the [mdq user manual](https://github.com/yshavit/mdq/wiki/Full-User-Manual) for the full selector reference.
+- **Each selector type** has a `parse-selector` branch, a filter function, and a `selector->filter-fn` dispatch entry.
+- **Text matching** (`parse-text-matcher`) returns a predicate or a `{:match-fn :replace}` map for `!s/pat/repl/`. Both are handled by `text-matches?`.
+- **`collect-nodes-deep`** does depth-first pre-order extraction (`tree-seq`) — extracted nodes retain content but lose parent context.
+- **Front matter** is a synthetic node injected by `exec!`, not produced by the markdown parser.
+- **CLI parsing** uses `babashka.cli` (via `parse-args` wrapper). Selectors like `- foo` need a `--` separator because `babashka.cli` treats leading dashes as flags.
 
-## Text Matching
+## Spec Compliance
 
-`parse-text-matcher` returns either a predicate `(fn [text] → bool)` or a map with `:match-fn` and `:replace`. Both are handled by `text-matches?`.
+Behavior matches the Rust reference except for CLI parsing differences due to `babashka.cli`:
 
-| Pattern | Behavior |
-|---------|----------|
-| `nil`, `""`, `*` | Returns `nil` (match all) |
-| `hello` | Case-insensitive substring |
-| `"Hello"` or `'Hello'`| Case-sensitive substring |
-| `^start` | Prefix match (case-insensitive unquoted) |
-| `end$` | Suffix match |
-| `/regex/` | Regex |
-| `!s/pat/repl/` | Regex replace — returns `{:match-fn fn, :replace {:pattern re, :replacement str}}` |
+| Difference | Workaround |
+|------------|------------|
+| Dash selectors (`- foo`) misparse as flags | Require `--` separator: `bbg mdq -- '- foo'` |
+| Combined short flags (`-oplain`) unsupported | Space-separated only: `-o plain` |
+| Flags after positionals leak into `:args` | Flags must precede positionals |
 
-## Key AST Node Shapes
+**Handling strategies in E2E tests:**
 
-```clojure
-;; Block nodes
-{:type :heading :heading-level 2 :content [inline-nodes]}
-{:type :paragraph :content [inline-nodes]}
-{:type :bullet-list :content [list-items]}
-{:type :numbered-list :attrs {:start 1} :content [list-items]}
-{:type :todo-list :content [todo-items]}
-{:type :list-item :content [block-nodes]}
-{:type :todo-item :attrs {:checked true} :content [block-nodes]}
-{:type :code :language "clojure" :content [{:type :text :text "..."}]}
-{:type :blockquote :content [block-nodes]}
+- **Local spec overrides** — `dev/test-specs/local/` files replace upstream specs with the same filename, documenting each difference in comments
+- **Ignore field** — individual test cases can be skipped with `ignore: "reason"`
+- **JSON comparison** — parse both expected and actual as data structures, not strings
+- **Substring matching** — stderr checks use `string/includes?`, not exact match
+- **Whitespace trimming** — `string/trimr` normalizes trailing newlines across execution modes
 
-;; Table (nested: table → head/body → row → cell)
-{:type :table :content [
-  {:type :table-head :content [{:type :table-row :content [cells]}]}
-  {:type :table-body :content [rows]}]}
+## Extending
 
-;; Inline nodes
-{:type :text :text "string"}
-{:type :link :attrs {:href "url"} :content [inline-nodes]}
-{:type :image :attrs {:src "url"} :content [inline-nodes]}
-{:type :strong :content [inline-nodes]}
-;; also: :em, :strikethrough, :monospace, :formula, :softbreak, :hardbreak
-
-;; Synthetic (injected by exec!, not from parser)
-{:type :front-matter :format :yaml :raw "title: Hello\nauthor: PEZ"}
-```
-
-## Function Map
-
-| Function | Contract |
-|----------|----------|
-| `split-pipeline(s)` | `string → [selector-strings]` — splits on `\|`, respects `/regex/` and quotes |
-| `parse-text-matcher(s)` | `string → (fn \| map \| nil)` |
-| `text-matches?(matcher, text)` | `(fn\|map), string → bool` — dispatches on fn vs map |
-| `parse-selector(s)` | `string → selector-map` |
-| `selector->filter-fn(sel)` | `selector-map → (fn [nodes] → [nodes])` |
-| `collect-nodes-deep(types, nodes)` | `#{types}, [nodes] → [matching-nodes]` — postwalk extraction |
-| `run-pipeline(nodes, selector-str)` | `[nodes], string → [result-nodes]` |
-| `apply-replacements(nodes, sels)` | `[nodes], [selectors] → [nodes]` — postwalk text replacement |
-| `emit-inline(node)` | `node → string` — inline content |
-| `emit-node(node)` | `node → string` — block content, calls `emit-inline` |
-| `emit-markdown(nodes)` | `[nodes] → string` — joins with `\n\n` |
-| `format-output(nodes, opts)` | `[nodes], {:output "markdown"\|"json"\|"edn"} → string` |
-| `pre-process-front-matter(s)` | `string → {:front-matter {:format :raw} :body string}` |
-| `parse-args(args)` | `[strings] → {:selector :output :quiet :help}` |
-| `exec!(args)` | `[strings] → side effects` — entry point |
-
-## Adding a New Selector
-
-1. **Parse** — add a `cond` branch in `parse-selector`:
-   ```clojure
-   (str/starts-with? s "@")
-   (let [text (str/trim (subs s 1))]
-     {:type :mention :matcher (parse-text-matcher text)})
-   ```
-
-2. **Filter** — add function before `selector->filter-fn`:
-   ```clojure
-   (defn mention-filter [{:keys [matcher]} nodes]
-     (let [mentions (collect-nodes-deep #{:mention} nodes)]
-       (cond->> mentions
-         matcher (filter #(text-matches? matcher (md/node->text %))))))
-   ```
-
-3. **Dispatch** — add case in `selector->filter-fn`:
-   ```clojure
-   :mention (fn [nodes] (mention-filter selector nodes))
-   ```
-
-4. **Emit** — if the node type needs custom markdown output, add a case in `emit-node`.
-
-5. **Test** — add to `test/mdq_test.clj`:
-   ```clojure
-   (deftest mention-filter-test
-     (let [nodes (:content (md/parse "..."))]
-       (testing "filter by text"
-         (is (= 1 (count (mdq/run-pipeline nodes "@alice")))))))
-   ```
-
-For selectors that restructure nodes (like tables), also implement a `rebuild-*` function.
-
-## Other Extension Recipes
-
-**Add output format** — add case in `format-output`:
-```clojure
-:yaml (yaml/generate-string {:items (nodes->data nodes)})
-```
-
-**Add CLI flag** — add branch in `parse-args`, use in `exec!`, document in help text.
-
-## CLI Parsing
-
-Custom `parse-args` (not `babashka.cli`) because selectors like `- foo` look like CLI flags. The parser recognizes `-o`, `-q`, `-h` as flags and treats the first unrecognized arg as the start of the selector string.
-
-Use `--` to force selector interpretation: `bbg mdq -- '- item'`
-
-## Gotchas
-
-- **Ordered list items** extracted by `list-filter` render as `- item` (lose ordinal context from parent `:numbered-list`)
-- **Front matter** is a synthetic node injected at position 0 of the AST by `exec!`, not by the markdown parser
-- **Regex replace** (`!s/pat/repl/`) returns a map, not a function — `text-matches?` dispatches on this
-- **Table `:-: *`** — wildcard matches all columns; combine with `:-: * :-: row-text` for row-only filtering
-- **Image before link** — `parse-selector` checks `![` before `[` since both are bracket-prefixed
-- **`collect-nodes-deep`** flattens tree structure — each extracted node retains its own content but loses parent context
-- **`System/exit` in REPL** kills the process — don't evaluate `exec!` with help/quiet flags in the REPL
+1. **New selector**: Add branch in `parse-selector` → filter function → dispatch in `selector->filter-fn` → emit case if needed → tests
+2. **New output format**: Add case in `format-output`
+3. **New CLI flag**: Add branch in `parse-args`, wire in `exec!`
 
 ## Testing
 
-~~Unit tests (`scripts/mdq/mdq_test.clj`) and E2E tests (`test/mdq_e2e_test.clj`) run automatically via VS Code watch tasks. The "Dev" compound task (Cmd+Shift+B) starts both watchers alongside the bb nREPL. Watchers re-run on file save — no need to run tests manually.~~ The get task output tool is temporarily broken.
-
-For now: Use direct bb tasks as the primary verification path:
-
-- `bbg test` for unit tests (tests found in `scripts/mdq/mdq_test.clj`)
-- `bbg e2e-test` for E2E tests (tests found in `test/mdq_e2e_test.clj`)
-
-To run a specific E2E spec file:
-
-```sh
-bb e2e-test --spec select_sections.toml
-```
-
-E2E specs live in `dev/test-specs/md_cases/`. The `--spec` flag accepts a filename to run a single spec instead of the full suite.
-
-## Testing
-
-Run: `bb run test` or `bb -cp "scripts:test" -e "(require 'mdq-test :reload) (clojure.test/run-tests 'mdq-test)"`
+- **Unit**: `bb test` — tests in `scripts/mdq/mdq_test.clj`
+- **E2E**: `bb e2e-test` — runs against TOML spec files in `dev/test-specs/`
+  - `--spec select_sections.toml` for a single spec
+  - `--refresh` to re-download upstream specs
+  - Requires **Python 3.11+** (`tomllib`) for TOML spec parsing
+- **Watch tasks**: Both run via VS Code's default build task (Cmd+Shift+B)
 
 Pattern — construct AST from markdown strings, test pure functions:
 ```clojure
@@ -185,62 +62,9 @@ Pattern — construct AST from markdown strings, test pure functions:
   (mdq/run-pipeline nodes "# Heading"))
 ```
 
-For front-matter tests, construct synthetic nodes directly since `md/parse` doesn't produce them.
+## Gotchas
 
-## E2E Testing
-
-Compatibility tests against the [Rust mdq](https://github.com/yshavit/mdq) reference implementation.
-
-Run: `bbg e2e-test`
-
-Options:
-- `--refresh` — re-download spec files from GitHub
-- `--spec FILE` — run a single spec (e.g., `--spec select_sections.toml`)
-
-### How It Works
-
-1. **Specs** — TOML test files from Rust mdq's `tests/md_cases/` directory, cached in `dev/test-specs/md_cases/`
-2. **Execution** — Each test case runs `bbg mdq` as a subprocess with the spec's markdown input and CLI args
-3. **Comparison** — Output, exit codes, and stderr are compared against expected values
-4. **Reporting** — Per-spec PASS/FAIL summary with failure details
-
-### Architecture
-
-| File | Purpose |
-|------|---------|
-| `test/e2e_specs.clj` | Download, cache, and parse TOML specs from GitHub |
-| `test/mdq_e2e_test.clj` | Test runner: execute cases, compare, report |
-
-Key functions in `e2e-specs`: `ensure-specs!`, `load-specs`, `parse-spec`
-Key functions in `mdq-e2e-test`: `run-test-case`, `run-specs`, `report-results`, `run!`
-
-### Normalization
-
-`normalize-expected` applies temporary output transformations to bridge known differences between our mdq and the Rust reference. Each rule is a TODO to remove as our implementation converges:
-
-- Trailing whitespace trim
-
-### Debugging Failures
-
-```bash
-# Run single spec
-bbg e2e-test --spec select_sections.toml
-
-# Inspect spec data in REPL
-(require '[e2e-specs :as specs])
-(def s (first (specs/load-specs :spec-file "select_sections.toml")))
-(:expectations s)  ; see all test cases
-
-# Run one test case manually
-(require '[mdq-e2e-test :as e2e])
-(e2e/run-test-case s (first (:expectations s)))
-```
-
-## Dependencies
-
-All built into Babashka — no external deps required:
-
-- `nextjournal.markdown` — markdown parser
-- `cheshire.core` — JSON output
-- `clj-yaml.core` — YAML front-matter (available but not actively used for parsing front matter content)
-- `clojure.walk` — AST traversal (`postwalk`)
+- **`System/exit` in REPL** kills the bb process — don't evaluate `exec!` in the REPL. The pipeline is factored so you can call `run-pipeline`, `parse-selector`, etc. directly. Use `process-inputs` for the closest to `exec!` without the exit risk.
+- **Ordered list items** extracted by `list-filter` render as `- item` (lose ordinal context)
+- **Image before link** in `parse-selector` — checks `![` before `[` since both start with brackets
+- **Regex replace** returns a map, not a function — `text-matches?` dispatches on type
