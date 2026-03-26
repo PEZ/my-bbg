@@ -2324,18 +2324,42 @@
    :order [:output :quiet :br :no-br :link-format :link-placement
            :link-pos :renumber-footnotes :wrap-width :help]})
 
+(defn- format-cli-error
+  "Formats a babashka.cli error into a user-friendly message."
+  [{:keys [cause option msg value]} args]
+  (let [has-dash-selector? (some #(and (string/starts-with? % "- ")
+                                       (not (string/starts-with? % "-- ")))
+                                 args)]
+    (case cause
+      :coerce (if has-dash-selector?
+                (str "Error: selector starting with '-' needs a '--' separator.\n"
+                     "  Example: bbg mdq -- '- selector'")
+                (if (string/includes? msg "(implicit) true")
+                  (str "Error: option --" (name option) " requires a value")
+                  (str "Error: invalid value for --" (name option)
+                       " (expected " (name (get-in (:spec cli-spec) [option :coerce]))
+                       ", got " (pr-str value) ")")))
+      :restrict (str "Error: unknown option --" (name option))
+      (str "Error: " msg))))
+
 (defn- parse-args [args]
-  (let [{:keys [opts args]} (cli/parse-args args cli-spec)
-        opts (if-let [v (:link-pos opts)]
-               (-> opts (dissoc :link-pos) (assoc :link-placement v))
-               opts)
-        opts (if (seq args)
-               (if (:selector opts)
-                 (update opts :files (fnil into []) args)
-                 (cond-> (assoc opts :selector (first args))
-                   (next args) (assoc :files (vec (rest args)))))
-               opts)]
-    opts))
+  (try
+    (let [{:keys [opts args]} (cli/parse-args args cli-spec)
+          opts (if-let [v (:link-pos opts)]
+                 (-> opts (dissoc :link-pos) (assoc :link-placement v))
+                 opts)
+          opts (if (seq args)
+                 (if (:selector opts)
+                   (update opts :files (fnil into []) args)
+                   (cond-> (assoc opts :selector (first args))
+                     (next args) (assoc :files (vec (rest args)))))
+                 opts)]
+      opts)
+    (catch Exception e
+      (let [data (ex-data e)]
+        (if (= :org.babashka/cli (:type data))
+          {:error (format-cli-error data args) :arg-error true}
+          (throw e))))))
 
 (defn- help-text []
   (str "Usage: bbg mdq [options] '<selector>' [file ...]\n\n"
@@ -2349,87 +2373,92 @@
    :error   - error string if processing failed"
   [input args]
   (let [opts (parse-args args)]
-    (if (:help opts)
-      {:output (help-text)
-       :exit 0}
-      (let [selector (:selector opts)]
-        (try
-          (let [{:keys [front-matter body]} (pre-process-front-matter input)
-                ast (md/parse body)
-                alignments (extract-table-alignments body)
-                raw-tables (extract-raw-tables body)
-                ast-nodes (-> (:content ast)
-                              (attach-table-alignments alignments)
-                              (attach-raw-tables raw-tables))
-                nodes (if front-matter
-                        (into [(assoc front-matter :type :front-matter)] ast-nodes)
-                        ast-nodes)
-                searchable-nodes (if-let [fns (seq (:footnotes ast))]
-                                   (into (vec nodes) fns)
-                                   nodes)
-                results (if selector
-                          (run-pipeline searchable-nodes selector)
-                          nodes)]
-            (if (:quiet opts)
-              {:exit (if (seq results) 0 1)}
-              (if (seq results)
-                (let [output (format-output results (assoc opts :ast ast :raw-md input))]
-                  {:output (if-let [w (:wrap-width opts)]
-                             (wrap-text output w)
-                             output)
-                   :exit 0})
-                {:exit 1})))
-          (catch Exception e
-            (let [error-data (ex-data e)]
-              {:error (if (= :parse-error (:type error-data))
-                        (format-pest-error error-data)
-                        (str "Error: " (ex-message e)))
-               :exit 1})))))))
+    (if-let [err (:error opts)]
+      {:error err :exit 1 :arg-error (:arg-error opts)}
+      (if (:help opts)
+        {:output (help-text)
+         :exit 0}
+        (let [selector (:selector opts)]
+          (try
+            (let [{:keys [front-matter body]} (pre-process-front-matter input)
+                  ast (md/parse body)
+                  alignments (extract-table-alignments body)
+                  raw-tables (extract-raw-tables body)
+                  ast-nodes (-> (:content ast)
+                                (attach-table-alignments alignments)
+                                (attach-raw-tables raw-tables))
+                  nodes (if front-matter
+                          (into [(assoc front-matter :type :front-matter)] ast-nodes)
+                          ast-nodes)
+                  searchable-nodes (if-let [fns (seq (:footnotes ast))]
+                                     (into (vec nodes) fns)
+                                     nodes)
+                  results (if selector
+                            (run-pipeline searchable-nodes selector)
+                            nodes)]
+              (if (:quiet opts)
+                {:exit (if (seq results) 0 1)}
+                (if (seq results)
+                  (let [output (format-output results (assoc opts :ast ast :raw-md input))]
+                    {:output (if-let [w (:wrap-width opts)]
+                               (wrap-text output w)
+                               output)
+                     :exit 0})
+                  {:exit 1})))
+            (catch Exception e
+              (let [error-data (ex-data e)]
+                {:error (if (= :parse-error (:type error-data))
+                          (format-pest-error error-data)
+                          (str "Error: " (ex-message e)))
+                 :exit 1}))))))))
 
 (defn process-inputs
   "Process inputs based on args. Returns {:output :exit :error}.
    io-fns: {:read-stdin (fn [] string), :resolve-file (fn [path] string)}"
   [args {:keys [read-stdin resolve-file]}]
-  (let [opts (parse-args args)
-        files (:files opts)]
-    (cond
-      (:help opts)
-      (process "" args)
+  (let [opts (parse-args args)]
+    (if-let [err (:error opts)]
+      {:error err :exit 1 :arg-error (:arg-error opts)}
+      (let [files (:files opts)]
+        (cond
+          (:help opts)
+          (process "" args)
 
-      (seq files)
-      (let [stdin-used? (volatile! false)
-            results (reduce (fn [acc file-path]
-                              (if (= "-" file-path)
-                                (if @stdin-used?
-                                  acc
-                                  (do (vreset! stdin-used? true)
-                                      (conj acc (process (read-stdin) args))))
-                                (try
-                                  (conj acc (process (resolve-file file-path) args))
-                                  (catch java.io.FileNotFoundException _
-                                    (conj acc {:error (str "entity not found while reading file \"" file-path "\"")
-                                               :exit 1})))))
-                            [] files)
-            errors (keep :error results)
-            outputs (keep :output results)
-            any-fail? (some #(pos? (:exit % 0)) results)]
-        {:output (when (seq outputs) (string/join "\n" (map string/trimr outputs)))
-         :error (when (seq errors) (string/join "\n" errors))
-         :exit (if any-fail? 1 0)})
+          (seq files)
+          (let [stdin-used? (volatile! false)
+                results (reduce (fn [acc file-path]
+                                  (if (= "-" file-path)
+                                    (if @stdin-used?
+                                      acc
+                                      (do (vreset! stdin-used? true)
+                                          (conj acc (process (read-stdin) args))))
+                                    (try
+                                      (conj acc (process (resolve-file file-path) args))
+                                      (catch java.io.FileNotFoundException _
+                                        (conj acc {:error (str "entity not found while reading file \"" file-path "\"")
+                                                   :exit 1})))))
+                                [] files)
+                errors (keep :error results)
+                outputs (keep :output results)
+                any-fail? (some #(pos? (:exit % 0)) results)]
+            {:output (when (seq outputs) (string/join "\n" (map string/trimr outputs)))
+             :error (when (seq errors) (string/join "\n" errors))
+             :exit (if any-fail? 1 0)})
 
-      :else
-      (process (read-stdin) args))))
+          :else
+          (process (read-stdin) args))))))
 
 (defn ^:export exec! [args]
   (let [opts (parse-args args)
         cwd (:cwd opts)
-        {:keys [output error exit]}
+        {:keys [output error exit arg-error]}
         (process-inputs args
                         {:read-stdin #(slurp *in*)
                          :resolve-file (fn [path]
                                          (slurp (if cwd
                                                   (java.io.File. cwd path)
-                                                  (java.io.File. path))))})]
+                                                  (java.io.File. path))))})
+        error (if arg-error (str error "\n\n" (help-text)) error)]
     (when output (println output))
     (when error (binding [*out* *err*] (println error)))
     (System/exit exit)))
