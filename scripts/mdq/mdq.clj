@@ -1116,8 +1116,6 @@
       (walk content []))
     @result))
 
-
-
 (defn- inline-text-positions [entries]
   (loop [remaining entries
          pos 0
@@ -2321,79 +2319,13 @@
     :help {:coerce :boolean :alias :h
            :desc "Show this help"}}
    :args->opts (cons :selector (repeat :files))
-   :coerce {:files []}
+   :coerce {:selector :string :files []}
+   :no-keyword-opts true
    :order [:output :quiet :br :no-br :link-format :link-placement
            :link-pos :renumber-footnotes :wrap-width :help]})
 
-(defn- flag-arity
-  "Return how many args a known flag consumes (0 for boolean, 1 for string/long).
-   Returns nil for unknown flags. --flag=value returns 0 (value is embedded)."
-  [flag]
-  (let [specs (:spec cli-spec)
-        by-long (into {} (map (fn [[k v]] [(str "--" (name k)) (:coerce v)])) specs)
-        by-alias (into {} (keep (fn [[_k v]]
-                                  (when-let [a (:alias v)]
-                                    [(str "-" (name a)) (:coerce v)])))
-                       specs)
-        by-no (into {} (keep (fn [[k v]]
-                               (when (= :boolean (:coerce v))
-                                 [(str "--no-" (name k)) :boolean])))
-                    specs)
-        all-flags (merge by-long by-alias by-no)]
-    (if-let [coerce-type (all-flags flag)]
-      (if (= :boolean coerce-type) 0 1)
-      (when (and (string/includes? (or flag "") "=")
-                 (all-flags (first (string/split flag #"=" 2))))
-        0))))
-
-(defn- prepare-args
-  "Reorder args: known flags first, then -- then positionals.
-   Prevents bare dashes and dash-space selectors from confusing babashka.cli."
-  [args]
-  (loop [remaining (seq args)
-         flags []
-         positionals []]
-    (if-not remaining
-      (if (seq positionals)
-        (into flags (cons "--" positionals))
-        flags)
-      (let [arg (first remaining)
-            arity (flag-arity arg)]
-        (cond
-          (= "--" arg)
-          (let [rest-args (into positionals (rest remaining))]
-            (if (seq rest-args)
-              (into flags (cons "--" rest-args))
-              flags))
-
-          ;; --flag=value (arity 0, value embedded)
-          (and (string/starts-with? arg "--")
-               (string/includes? arg "=")
-               (some? (flag-arity arg)))
-          (recur (next remaining) (conj flags arg) positionals)
-
-          ;; Flag that takes a value argument
-          (and arity (pos? arity))
-          (recur (nnext remaining)
-                 (conj flags arg (second remaining))
-                 positionals)
-
-          ;; Boolean flag (may have explicit true/false)
-          (some? arity)
-          (let [nxt (second remaining)]
-            (if (#{"true" "false"} nxt)
-              (recur (nnext remaining)
-                     (conj flags arg nxt)
-                     positionals)
-              (recur (next remaining)
-                     (conj flags arg)
-                     positionals)))
-
-          :else
-          (recur (next remaining) flags (conj positionals arg)))))))
-
 (defn- parse-args [args]
-  (let [{:keys [opts args]} (cli/parse-args (prepare-args args) cli-spec)
+  (let [{:keys [opts args]} (cli/parse-args args cli-spec)
         opts (if-let [v (:link-pos opts)]
                (-> opts (dissoc :link-pos) (assoc :link-placement v))
                opts)
@@ -2409,8 +2341,6 @@
   (str "Usage: bbg mdq [options] '<selector>' [file ...]\n\n"
        "Options:\n"
        (cli/format-opts cli-spec)))
-
-
 
 (defn- process
   "Processes markdown input with given args. Returns a map with:
@@ -2489,8 +2419,6 @@
 
       :else
       (process (read-stdin) args))))
-
-
 
 (defn ^:export exec! [args]
   (let [opts (parse-args args)

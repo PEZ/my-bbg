@@ -1,0 +1,111 @@
+# Local override of md_cases/footnotes_in_footnotes.toml
+# Adds -- before dash-selectors for babashka.cli compatibility
+# (babashka.cli misparses '- foo' as flags; may be fixed in future)
+
+[given]
+md = '''
+- AAA: (footnotes in links don't work: see https://gist.github.com/yshavit/6af0a784e338dc32e66717aa6f495ffe )
+- BBB: footnote contains footnote[^2]
+- CCC: footnote contains link[^3]
+- DDD: footnote contains cycle[^cycle]
+
+[^1]: the link's footnote text
+[^2]: this footnote contains[^a] a footnote
+[^3]: this footnote contains a [link][3a]
+[^a]: this is the footnote's footnote
+[^cycle]: this footnote references itself[^cycle]
+
+[3a]: https://example.com/3a
+'''
+
+[chained]
+needed = false
+
+
+[expect."just footnote contains footnote"]
+cli_args = ['--', '- BBB']
+output = '''
+- BBB: footnote contains footnote[^1]
+
+[^1]: this footnote contains[^2] a footnote
+[^2]: this is the footnote's footnote
+'''
+
+
+[expect."just footnote contains footnote: json"]
+cli_args = ['--output', 'json', '--', '- BBB | P: *']
+output_json = true
+output = '''
+{
+  "items": [
+    {
+      "paragraph": "BBB: footnote contains footnote[^1]"
+    }
+  ],
+  "footnotes": {
+    "1": [
+      {
+        "paragraph": "this footnote contains[^2] a footnote"
+      }
+    ],
+    "2": [
+      {
+        "paragraph": "this is the footnote's footnote"
+      }
+    ]
+  }
+}
+'''
+
+
+[expect."just footnote contains link"]
+cli_args = ['--', '- CCC']
+output = '''
+- CCC: footnote contains link[^1]
+
+[3a]: https://example.com/3a
+[^1]: this footnote contains a [link][3a]
+'''
+
+
+[expect."just footnote contains link: json"]
+cli_args = ['--output', 'json', '--', '- CCC | P: *']
+output_json = true
+output = '''
+{
+  "items": [
+    {
+      "paragraph": "CCC: footnote contains link[^1]"
+    }
+  ],
+  "footnotes": {
+    "1": [
+      {
+        "paragraph": "this footnote contains a [link][3a]"
+      }
+    ]
+  },
+  "links": {
+    "3a": {
+      "url": "https://example.com/3a"
+    }
+  }
+}
+'''
+
+
+[expect."cyclic reference doesn't cause infinite loop"]
+cli_args = ['--', '- DDD | P: *']
+output = '''
+DDD: footnote contains cycle[^1]
+
+[^1]: this footnote references itself[^1]
+'''
+
+[expect."look for elements within a footnote"]
+cli_args = ['[]("/3a"$)']
+output = '''
+[link][3a]
+
+[3a]: https://example.com/3a
+'''

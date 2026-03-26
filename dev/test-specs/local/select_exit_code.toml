@@ -1,0 +1,28 @@
+# Local override of md_cases/select_exit_code.toml
+# Moves flags before positionals for babashka.cli compatibility
+# (babashka.cli leaks flag values into :args when flags follow positionals)
+
+[given]
+md = '''
+[fizz](https://example.com/buzz)
+'''
+
+[chained]
+needed = false
+
+
+[expect."match and output"]
+cli_args = ["--link-format", "keep", "[]()"]
+output = '''
+[fizz](https://example.com/buzz)'''
+
+
+[expect."match quiet"]
+cli_args = ["-q", "--link-format", "keep", "[]()"]
+output = ''
+
+
+[expect."no match"]
+cli_args = ["--link-format", "keep", "[no match]()"]
+output = ''
+expect_success = false

@@ -1,0 +1,300 @@
+# Local override of md_cases/output_format.toml
+# Adds -- before dash-selectors for babashka.cli compatibility
+# (babashka.cli misparses '- foo' as flags; may be fixed in future)
+
+[given]
+md = '''
+Test _one_ [two][1] three.
+
+- alpha 1
+- alpha 2
+
+```rust
+some_markdown("rust");
+```
+
+- bravo
+
+```bash
+echo 'some bash'
+```
+
+[1]: https://example.com/1
+'''
+
+[chained]
+needed = false
+
+
+[expect."default"]
+cli_args = []
+output = '''
+Test _one_ [two][1] three.
+
+- alpha 1
+- alpha 2
+
+```rust
+some_markdown("rust");
+```
+
+- bravo
+
+```bash
+echo 'some bash'
+```
+
+[1]: https://example.com/1
+'''
+
+[expect."default codes"]
+cli_args = ['```']
+output = '''
+```rust
+some_markdown("rust");
+```
+
+   -----
+
+```bash
+echo 'some bash'
+```
+'''
+
+
+
+[expect."codes with no breaks"]
+cli_args = ['--no-br', '```']
+output = '''
+```rust
+some_markdown("rust");
+```
+
+```bash
+echo 'some bash'
+```
+'''
+
+
+[expect."md"]
+cli_args = ['-o', 'md']
+output = '''
+Test _one_ [two][1] three.
+
+- alpha 1
+- alpha 2
+
+```rust
+some_markdown("rust");
+```
+
+- bravo
+
+```bash
+echo 'some bash'
+```
+
+[1]: https://example.com/1
+'''
+
+
+[expect."md codes"]
+cli_args = ['--output', 'md', '```']
+output = '''
+```rust
+some_markdown("rust");
+```
+
+   -----
+
+```bash
+echo 'some bash'
+```
+'''
+
+
+[expect."md with no breaks"]
+cli_args = ['--no-br', '--output', 'md', '```']
+output = '''
+```rust
+some_markdown("rust");
+```
+
+```bash
+echo 'some bash'
+```
+'''
+
+
+[expect."markdown"]
+cli_args = ['--output', 'markdown']
+output = '''
+Test _one_ [two][1] three.
+
+- alpha 1
+- alpha 2
+
+```rust
+some_markdown("rust");
+```
+
+- bravo
+
+```bash
+echo 'some bash'
+```
+
+[1]: https://example.com/1
+'''
+
+
+[expect."markdown codes"]
+cli_args = ['--output', 'markdown', '```']
+output = '''
+```rust
+some_markdown("rust");
+```
+
+   -----
+
+```bash
+echo 'some bash'
+```
+'''
+
+[expect."markdown with no breaks"]
+cli_args = ['--no-br', '--output', 'markdown', '```']
+output = '''
+```rust
+some_markdown("rust");
+```
+
+```bash
+echo 'some bash'
+```
+'''
+
+
+[expect."json"]
+cli_args = ['--output', 'json']
+output_json = true
+output = '''
+{
+    "items": [
+        {
+            "document": [
+                {
+                    "paragraph": "Test _one_ [two][1] three."
+                },
+                {
+                    "list": [
+                        {
+                          "item": [
+                            {
+                              "paragraph": "alpha 1"
+                            }
+                          ]
+                        },
+                        {
+                          "item": [
+                            {
+                              "paragraph": "alpha 2"
+                            }
+                          ]
+                        }
+                    ]
+                },
+                {
+                  "code_block": {
+                    "code": "some_markdown(\"rust\");",
+                    "language": "rust",
+                    "type": "code"
+                  }
+                },
+                {
+                  "list": [
+                    {
+                      "item": [
+                        {
+                          "paragraph": "bravo"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "code_block": {
+                    "code": "echo 'some bash'",
+                    "language": "bash",
+                    "type": "code"
+                  }
+                }
+            ]
+        }
+    ],
+    "links": {
+        "1": {
+            "url": "https://example.com/1"
+        }
+    }
+}
+'''
+
+[expect."json items"]
+cli_args = ['--output', 'json', '--', '- *']
+output_json = true
+output = '''
+{
+    "items": [
+        {
+            "list": [
+                {
+                    "item": [ { "paragraph": "alpha 1" } ]
+                }
+            ]
+        },
+        {
+            "list": [
+                {
+                    "item": [ { "paragraph": "alpha 2" } ]
+                }
+            ]
+        },
+        {
+            "list": [
+                {
+                    "item": [ { "paragraph": "bravo" } ]
+                }
+            ]
+        }
+    ]
+}
+'''
+
+
+[expect."plain"]
+cli_args = ['-o', 'plain']
+output = '''
+Test one two three.
+alpha 1
+alpha 2
+some_markdown("rust");
+bravo
+echo 'some bash'
+'''
+
+[expect."plain with breaks"]
+cli_args = ['-o', 'plain', '--br']
+output = '''
+Test one two three.
+
+alpha 1
+
+alpha 2
+
+some_markdown("rust");
+
+bravo
+
+echo 'some bash'
+'''
