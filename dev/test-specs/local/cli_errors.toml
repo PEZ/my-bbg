@@ -1,0 +1,30 @@
+[given]
+md = '''
+- a point
+'''
+
+[chained]
+needed = false
+
+[expect."dash selector without separator"]
+cli_args = ['- foo']
+expect_success = false
+output = ''
+output_err = "Error: selector starting with '-' needs a '--' separator."
+
+[expect."missing option value"]
+cli_args = ['-o']
+expect_success = false
+output = ''
+output_err = 'Error: option --output requires a value'
+
+[expect."invalid option type"]
+cli_args = ['--wrap-width', 'foo']
+expect_success = false
+output = ''
+output_err = 'Error: invalid value for --wrap-width (expected long'
+
+[expect."dash selector with separator works"]
+cli_args = ['--', '- a point']
+output = '''
+- a point'''
