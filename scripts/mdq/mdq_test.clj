@@ -524,12 +524,22 @@
     (let [opts (#'mdq/parse-args ["-o" "json" "# hello"])]
       (is (= "json" (:output opts)))
       (is (= "# hello" (:selector opts)))))
-  (testing "selector starting with dash"
-    (is (= "- foo" (:selector (#'mdq/parse-args ["- foo"])))))
+  (testing "selector starting with dash returns error"
+    (is (:error (#'mdq/parse-args ["- foo"]))))
+  (testing "selector starting with dash with -- separator"
+    (is (= "- foo" (:selector (#'mdq/parse-args ["--" "- foo"])))))
+  (testing "flags before -- with dash selector after"
+    (is (= {:output "json" :selector "- foo"}
+           (select-keys (#'mdq/parse-args ["-o" "json" "--" "- foo"])
+                        [:output :selector]))))
   (testing "quiet flag"
     (is (true? (:quiet (#'mdq/parse-args ["-q" "# test"])))))
   (testing "double-dash separator"
-    (is (= "- foo" (:selector (#'mdq/parse-args ["--" "- foo"]))))))
+    (is (= "- foo" (:selector (#'mdq/parse-args ["--" "- foo"])))))
+  (testing "missing option value returns error"
+    (is (:error (#'mdq/parse-args ["-o"]))))
+  (testing "invalid type returns error"
+    (is (:error (#'mdq/parse-args ["--wrap-width" "foo"])))))
 
 (deftest piped-element-selectors-test
   (let [nodes (:content (md/parse "# Setup\n- item 1\n- item 2\n\n# API\n- endpoint 1\n"))]
