@@ -1,5 +1,3 @@
 #!/usr/bin/env bash
 
-CALLER_CWD="$(pwd)"
-cd ~/.config/bbg || { echo "Could not change directory to ~/.config/bbg"; exit 1; }
-bb "$@" --cwd "$CALLER_CWD"
+bb --config ~/.config/bbg/bb.edn "$@"

@@ -4,7 +4,7 @@
     {
       "label": "BB nREPL",
       "type": "shell",
-      "command": "mkdir -p bb && echo 16664 > bb/.nrepl-port && bb nrepl --port 16664",
+      "command": "mkdir -p bb && echo 16664 > bb/.nrepl-port && bb -bbg:nrepl --port 16664",
       "isBackground": true,
       "problemMatcher": [],
       "presentation": {
@@ -15,7 +15,7 @@
       "label": "Watch Unit Tests",
       "type": "shell",
       "command": "bb",
-      "args": ["watch-test"],
+      "args": ["-bbg:watch:unit"],
       "isBackground": true,
       "problemMatcher": {
         "owner": "bb-watch-test",
@@ -41,7 +41,7 @@
       "label": "Watch E2E Tests",
       "type": "shell",
       "command": "bb",
-      "args": ["watch-e2e"],
+      "args": ["-bbg:watch:e2e"],
       "isBackground": true,
       "problemMatcher": {
         "owner": "bb-watch-e2e",

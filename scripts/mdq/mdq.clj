@@ -2314,8 +2314,6 @@
                          :desc "Renumber footnotes (default true; false preserves labels)"}
     :wrap-width {:coerce :long :ref "<cols>"
                  :desc "Wrap output to the given column width"}
-    :cwd {:coerce :string :ref "<path>"
-          :desc "Working directory for file resolution"}
     :help {:coerce :boolean :alias :h
            :desc "Show this help"}}
    :args->opts (cons :selector (repeat :files))
@@ -2449,15 +2447,11 @@
           (process (read-stdin) args))))))
 
 (defn ^:export exec! [args]
-  (let [opts (parse-args args)
-        cwd (:cwd opts)
-        {:keys [output error exit arg-error]}
+  (let [{:keys [output error exit arg-error]}
         (process-inputs args
                         {:read-stdin #(slurp *in*)
                          :resolve-file (fn [path]
-                                         (slurp (if cwd
-                                                  (java.io.File. cwd path)
-                                                  (java.io.File. path))))})
+                                         (slurp (java.io.File. path)))})
         error (if arg-error (str error "\n\n" (help-text)) error)]
     (when output (println output))
     (when error (binding [*out* *err*] (println error)))

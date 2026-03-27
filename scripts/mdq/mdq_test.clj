@@ -1089,6 +1089,4 @@
                   "--quiet"
                   "--help"]]
       (is (clojure.string/includes? output flag)
-          (str "help output should mention " flag)))
-    (is (not (clojure.string/includes? output "--cwd"))
-        "help output should not mention internal --cwd")))
+          (str "help output should mention " flag)))))

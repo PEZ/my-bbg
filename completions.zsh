@@ -4,7 +4,7 @@ _bbg() {
         compadd -a tasks
     else
         local task="${words[2]}"
-        local opts=(`bbg -task-options "$task"`)
+        local opts=(`bbg -bbg:task-options "$task"`)
         if (( ${#opts} )); then
             compadd -a opts
         fi

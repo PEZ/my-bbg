@@ -8,7 +8,7 @@ This is also a recipe for building your own global task system with Babashka. Th
 
 It's basically this, from @borkdude: https://clojureverse.org/t/help-utilizing-babashka-tasks-globally/8026/2
 
-The `bbg` wrapper captures your working directory, `cd`s to `~/.config/bbg`, and runs `bb <task> --cwd <your-dir>`. Tasks get access to both the project root (for their own resources) and the caller's directory (for operating on whatever project you're in). A symlink at `~/bin/bbg` points to the wrapper script. (Relying on `~/bin` being in your `$PATH`.)
+The `bbg` wrapper uses `bb --config ~/.config/bbg/bb.edn` so that Babashka finds the task definitions and scripts regardless of where you invoke it, while keeping your working directory intact. A symlink at `~/bin/bbg` points to the wrapper script. (Relying on `~/bin` being in your `$PATH`.)
 
 ```sh
 bbg tasks          # list available tasks
@@ -52,11 +52,6 @@ The tasks here are personal utilities — they may or may not be useful to anyon
 | `java` | Get help with switching beteen Java mejor versions via SDKMAN | |
 | `config` | Commit and push dotfile/config repos | |
 | `loc` | Count lines of code (wraps `cloc`) | |
-| `test` | Run unit tests | Only `mdq` for now |
-| `e2e-test` | Run E2E tests against TOML spec files | Onlt `mdq` for now |
-| `watch-test` | Auto-rerun unit tests on file changes | |
-| `watch-e2e` | Auto-rerun E2E tests on file changes | |
-| `nrepl` | Start an Babashka nREPL server on a know port | Also writes the port to `bb/.nrepl-port` where Calva looks for it |
 
 ## mdq — Markdown Query Tool
 
@@ -90,13 +85,21 @@ And just `bbg bb` gives you status of what you are using and what is available.
 
 ## Development
 
-The default build task starts a Babashka nREPL server and both test watchers.
+There are some hidden tasks to aid in development of tasks and bbg:
+
+| Task | What it does | Notes |
+|------|-------------|-------|
+| `-bbg:test:unit` | Run unit tests | Only `mdq` for now |
+| `-bbg:test:e2e` | Run E2E tests against TOML spec files | Only `mdq` for now |
+| `-bbg:watch:unit` | Auto-rerun unit tests on file changes | |
+| `-bbg:watch:e2e` | Auto-rerun E2E tests on file changes | |
+| `-bbg:nrepl` | Start a Babashka nREPL server on a known port | Also writes the port to `bb/.nrepl-port` where Calva looks for it |
 
 ### Testing
 
-- **Unit tests** (`bb test`) — `clojure.test` tests for core mdq parsing and selector logic
-- **E2E tests** (`bb e2e-test`) — Runs mdq against TOML spec files that define input markdown, CLI args, and expected output
-- **Watch tasks** — `bb watch-test` and `bb watch-e2e` rerun on changes to `scripts/`, `test/`, and (for E2E) `dev/test-specs/`
+- **Unit tests** (`bb -bbg:test:unit`) — `clojure.test` tests for core mdq parsing and selector logic
+- **E2E tests** (`bb -bbg:test:e2e`) — Runs mdq against TOML spec files that define input markdown, CLI args, and expected output
+- **Watch tasks** — `bb -bbg:watch:unit` and `bb -bbg:watch:e2e` rerun on changes to `scripts/`, `test/`, and (for E2E) `dev/test-specs/`
 
 E2E specs live in [dev/test-specs/](dev/test-specs/). The [md_cases/](dev/test-specs/md_cases/) directory caches upstream specs from the Rust mdq project; [local/](dev/test-specs/local/) holds bbg-specific tests. Use `bb e2e-test --refresh` to re-download upstream specs.
 

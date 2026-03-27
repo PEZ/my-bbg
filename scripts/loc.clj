@@ -1,9 +1,8 @@
 (ns loc
   (:require [babashka.process :as p]))
 
-(defn count! [{:keys [cwd]}]
+(defn count! []
   (p/shell
-   {:dir cwd}
    "cloc"
    "--vcs=git"
    "--exclude-lang=Markdown"
