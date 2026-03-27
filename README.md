@@ -54,7 +54,7 @@ The tasks here are personal utilities — they may or may not be useful to anyon
 | `loc` | Count lines of code (wraps `cloc`) | |
 | `bb-nrepl` | Start a Babashka nREPL server (random port) | Writes port to `./bb/.nrepl-port`; optional `--port <n>` |
 
-## mdq — Markdown Query Tool
+### mdq — Markdown Query Tool
 
 The most substantial piece here. A Babashka implementation of [yshavit/mdq](https://github.com/yshavit/mdq), written to the [mdq spec](https://github.com/yshavit/mdq/tree/main/tests/md_cases). Selectors mirror the Markdown they match — `# heading`, `- list item`, `` ```language ``, `[link](url)`, etc. — and chain via pipes.
 
@@ -66,7 +66,7 @@ echo "# Intro\nHello\n# Details\nWorld" | bbg mdq '# Details'
 
 Supports text matchers (substring, `"exact"`, `/regex/`, `^anchor$`), search-and-replace (`!s/pattern/replacement/`), and output as Markdown, JSON, or EDN. See the [mdq user manual](https://github.com/yshavit/mdq/wiki/Full-User-Manual) for the full selector reference.
 
-### Differences from upstream mdq
+#### Differences from upstream mdq
 
 Since bbg uses `babashka.cli` for argument parsing, there are a few CLI-level differences:
 
@@ -74,7 +74,7 @@ Since bbg uses `babashka.cli` for argument parsing, there are a few CLI-level di
 - **Space-separated flags**: `-o plain`, no support for `-oplain`.
 - **Flags before positionals**: Flags placed after positional arguments leak into `:args`.
 
-## bb
+### bb
 
 Meta... It makes it easy to switch to latest or some particular version of `bb`. Or to latest from `master`, or even to a version as built form a PR. Created because to make the `mdq` use Instaparse, I needed a yet to be released version of `bb`:
 
@@ -83,6 +83,10 @@ bbg bb master
 ```
 
 And just `bbg bb` gives you status of what you are using and what is available.
+
+### bb-nrepl
+
+Afaik, `bb` does not write an `.nrepl-port` that nREPL clients can use for knowing where to connect. `bbg bb-nrepl` exists to fix that. If you are a [Calva](https://calva.io) user, by defaul, Calva will look for Babashka's port file in `<project-root>/bb/.nrepl`, so that's where this task puts it. (Albeit, if you are using Calva Jack-in to start and connect the Babashka repl, you don't need this task, Calva will figure out the port anyway.)
 
 ## Development
 
