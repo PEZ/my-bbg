@@ -52,6 +52,7 @@ The tasks here are personal utilities — they may or may not be useful to anyon
 | `java` | Get help with switching beteen Java mejor versions via SDKMAN | |
 | `config` | Commit and push dotfile/config repos | |
 | `loc` | Count lines of code (wraps `cloc`) | |
+| `bb-nrepl` | Start a Babashka nREPL server (random port) | Writes port to `./bb/.nrepl-port`; optional `--port <n>` |
 
 ## mdq — Markdown Query Tool
 
@@ -93,7 +94,6 @@ There are some hidden tasks to aid in development of tasks and bbg:
 | `-bbg:test:e2e` | Run E2E tests against TOML spec files | Only `mdq` for now |
 | `-bbg:watch:unit` | Auto-rerun unit tests on file changes | |
 | `-bbg:watch:e2e` | Auto-rerun E2E tests on file changes | |
-| `-bbg:nrepl` | Start a Babashka nREPL server on a known port | Also writes the port to `bb/.nrepl-port` where Calva looks for it |
 
 ### Testing
 

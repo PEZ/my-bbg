@@ -12,6 +12,7 @@
              loc
              mdq
              mdq-e2e-test
+             bb-nrepl
              watch)
 
   loc {:doc "Count lines of code (excludes generated files, markdown, vendor)"
@@ -36,43 +37,36 @@
   mdq {:doc "Query Markdown (jq for Markdown)"
        :task (mdq/exec! *command-line-args*)}
 
+  bb-nrepl {:doc "Start bb nREPL server [--port <n>]"
+            :task (bb-nrepl/start! (cli/parse-opts *command-line-args*
+                                                   bb-nrepl/cli-spec))}
+
   -bbg:test:e2e {:doc "Run E2E compatibility tests against Rust mdq specs"
-            :task (mdq-e2e-test/run-e2e!
-                   (cli/parse-opts *command-line-args*
-                                   mdq-e2e-test/cli-spec))}
+                 :task (mdq-e2e-test/run-e2e!
+                        (cli/parse-opts *command-line-args*
+                                        mdq-e2e-test/cli-spec))}
 
   -bbg:test:unit {:doc "Run tests"
                   :task (do (require 'mdq-test :reload)
                             (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test)]
                               (System/exit (if (zero? (+ fail error)) 0 1))))}
 
-  -bbg:nrepl {:doc "Start nREPL server and write port to .nrepl-port"
-         :requires ([babashka.fs :as fs]
-                    [babashka.nrepl.server :as srv])
-         :task (let [port (or (:port (cli/parse-opts *command-line-args* {:coerce {:port :int}})) 1667)]
-                 (srv/start-server! {:host "localhost"
-                                     :port port})
-                 (spit ".nrepl-port" (str port))
-                 (-> (Runtime/getRuntime)
-                     (.addShutdownHook
-                      (Thread. (fn [] (fs/delete ".nrepl-port")))))
-                 (deref (promise)))}
-
   -bbg:watch:unit {:doc "Watch scripts/ and test/ and re-run unit tests on changes"
                    :task (watch/watch! "Unit Tests" "bb -bbg:test:unit"
-                                  ["scripts" "test"]
-                                  {:extensions [".clj"]})}
+                                       ["scripts" "test"]
+                                       {:extensions [".clj"]})}
 
   -bbg:task-options {:task (let [task-specs {"bb"       bb-man/cli-spec
-                                              "clj"      deps-clj-as-clojure/cli-spec
-                                              "config"   config-save/cli-spec
-                                              "java"     java-version/cli-spec
-                                              "mdq"      mdq/cli-spec}]
-                         (doseq [opt (-> (get task-specs (first *command-line-args*))
-                                         :coerce keys)]
-                           (println (str "--" (name opt)))))}
+                                             "bb-nrepl" bb-nrepl/cli-spec
+                                             "clj"      deps-clj-as-clojure/cli-spec
+                                             "config"   config-save/cli-spec
+                                             "java"     java-version/cli-spec
+                                             "mdq"      mdq/cli-spec}]
+                             (doseq [opt (-> (get task-specs (first *command-line-args*))
+                                             :coerce keys)]
+                               (println (str "--" (name opt)))))}
 
   -bbg:watch:e2e {:doc "Watch scripts/, test/, and test specs, re-run E2E tests on changes"
                   :task (watch/watch! "E2E Tests" "bb -bbg:test:e2e"
-                                 ["scripts" "test" "dev/test-specs"]
-                                 {:extensions [".clj" ".toml"]})}}}
+                                      ["scripts" "test" "dev/test-specs"]
+                                      {:extensions [".clj" ".toml"]})}}}

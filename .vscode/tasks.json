@@ -4,7 +4,7 @@
     {
       "label": "BB nREPL",
       "type": "shell",
-      "command": "mkdir -p bb && echo 16664 > bb/.nrepl-port && bb -bbg:nrepl --port 16664",
+      "command": "bb bb-nrepl",
       "isBackground": true,
       "problemMatcher": [],
       "presentation": {
