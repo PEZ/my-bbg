@@ -15,8 +15,8 @@
              bb-nrepl
              watch)
 
-  loc {:doc "Count lines of code (excludes generated files, markdown, vendor)"
-       :task (loc/count!)}
+  loc {:doc "Count lines of code [path...] (excludes generated files, markdown, vendor)"
+       :task (loc/count! *command-line-args*)}
 
   bb {:doc "Manage bb binary [--download <ref> | --use <ref> | --unuse]"
       :task (bb-man/exec! (cli/parse-opts *command-line-args*
