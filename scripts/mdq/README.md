@@ -2,7 +2,7 @@
 
 A faithful port of [Rust mdq](https://github.com/yshavit/mdq), *jq for markdown* to [Babashka](https://babashka.org/).
 
-[bbg mdq](mdq.clj) is written against [Rust mdq's integration test suite](https://github.com/yshavit/mdq/tree/main/tests), and passes them all, with a few tests adapted to accommodate `babashka.cli` differences with whatever *Rust mdq* uses for command line parsing. The *bbg mdq* test runner downloads the TOML test definitions from *Rust mdq* and runs them, overshadowing with any local adaptations.
+[bbg mdq](mdq.clj) is written against [Rust mdq's integration test suite](https://github.com/yshavit/mdq/tree/main/tests), and passes them all, with a few tests adapted to accommodate `babashka.cli` differences with whatever *Rust mdq* uses for command line parsing. [The *bbg mdq* test runner](../../test/mdq_e2e_test.clj) downloads the TOML test definitions from *Rust mdq* and runs them, overshadowing with any local adaptations.
 
 ## Differences from Rust mdq
 
@@ -10,7 +10,7 @@ A faithful port of [Rust mdq](https://github.com/yshavit/mdq), *jq for markdown*
 *bbg mdq* supports EDN output:
 
 ```
-❯ bbg mdq --output edn '# Differences' README.md mdq-rust.md
+❯ bbg mdq --output edn '# Libraries' README.md mdq-rust.md
 {:items
  [{:section
    {:depth 2,
