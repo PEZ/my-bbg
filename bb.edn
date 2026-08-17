@@ -5,18 +5,24 @@
  :pods {org.babashka/fswatcher {:version "0.0.7"}}
  :tasks
  {:requires ([babashka.cli :as cli]
+             assoc-exts
              bb-man
              config-save
              deps-clj-as-clojure
              java-version
              loc
-             mdq
-             mdq-e2e-test
+             named-du
              bb-nrepl
              watch)
 
   loc {:doc "Count lines of code [path...] (excludes generated files, markdown, vendor)"
        :task (loc/count! *command-line-args*)}
+
+  named-du {:doc "Disk usage for named dirs [name...] [--root DIR] [--limit N] [--edn] (default root ~/Projects)"
+            :task (named-du/report! *command-line-args*)}
+
+  assoc-exts {:doc "Promote an app for coding extensions [app] [exts] [--force] [--dry-run] [--list]"
+              :task (assoc-exts/exec! *command-line-args*)}
 
   bb {:doc "Manage bb binary [--download <ref> | --use <ref> | --unuse]"
       :task (bb-man/exec! (cli/parse-opts *command-line-args*
@@ -35,6 +41,7 @@
                                                   java-version/cli-spec))}
 
   mdq {:doc "Query Markdown (jq for Markdown)"
+       :requires ([mdq])
        :task (mdq/exec! *command-line-args*)}
 
   bb-nrepl {:doc "Start bb nREPL server [--port <n>]"
@@ -42,6 +49,7 @@
                                                    bb-nrepl/cli-spec))}
 
   -bbg:test:e2e {:doc "Run E2E compatibility tests against Rust mdq specs"
+                 :requires ([mdq-e2e-test])
                  :task (mdq-e2e-test/run-e2e!
                         (cli/parse-opts *command-line-args*
                                         mdq-e2e-test/cli-spec))}
@@ -56,12 +64,15 @@
                                        ["scripts" "test"]
                                        {:extensions [".clj"]})}
 
-  -bbg:task-options {:task (let [task-specs {"bb"       bb-man/cli-spec
-                                             "bb-nrepl" bb-nrepl/cli-spec
-                                             "clj"      deps-clj-as-clojure/cli-spec
-                                             "config"   config-save/cli-spec
-                                             "java"     java-version/cli-spec
-                                             "mdq"      mdq/cli-spec}]
+  -bbg:task-options {:requires ([mdq])
+                     :task (let [task-specs {"assoc-exts" assoc-exts/cli-spec
+                                             "bb"        bb-man/cli-spec
+                                             "bb-nrepl"  bb-nrepl/cli-spec
+                                             "clj"       deps-clj-as-clojure/cli-spec
+                                             "config"    config-save/cli-spec
+                                             "java"      java-version/cli-spec
+                                             "mdq"       mdq/cli-spec
+                                             "named-du"  named-du/cli-spec}]
                              (doseq [opt (-> (get task-specs (first *command-line-args*))
                                              :coerce keys)]
                                (println (str "--" (name opt)))))}
