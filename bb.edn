@@ -13,6 +13,9 @@
              loc
              named-du
              bb-nrepl
+             grok-bot-sync
+             idea-inbox-backup
+             skills-sync
              watch)
 
   loc {:doc "Count lines of code [path...] (excludes generated files, markdown, vendor)"
@@ -48,6 +51,17 @@
             :task (bb-nrepl/start! (cli/parse-opts *command-line-args*
                                                    bb-nrepl/cli-spec))}
 
+  grok-bot-sync {:doc "Lean-sync Calva projects for Grok Bot [--dry-run] [--projects a,b]"
+                 :task (grok-bot-sync/exec! *command-line-args*)}
+
+  idea-inbox-backup {:doc "Apply Grok Bot idea-inbox.bundle into ~/Projects/idea-inbox [--dry-run]"
+                     :task (idea-inbox-backup/exec! *command-line-args*)}
+
+  skills-sync {:doc "Symlink ~/.agents/skills + ~/.cursor/skills into ~/.claude/skills [--dry-run]"
+               :task (skills-sync/exec! *command-line-args*)}
+
+
+
   -bbg:test:e2e {:doc "Run E2E compatibility tests against Rust mdq specs"
                  :requires ([mdq-e2e-test])
                  :task (mdq-e2e-test/run-e2e!
@@ -72,7 +86,10 @@
                                              "config"    config-save/cli-spec
                                              "java"      java-version/cli-spec
                                              "mdq"       mdq/cli-spec
-                                             "named-du"  named-du/cli-spec}]
+                                             "named-du"  named-du/cli-spec
+                                             "grok-bot-sync" grok-bot-sync/cli-spec
+                                             "idea-inbox-backup" idea-inbox-backup/cli-spec
+                                             "skills-sync" skills-sync/cli-spec}]
                              (doseq [opt (-> (get task-specs (first *command-line-args*))
                                              :coerce keys)]
                                (println (str "--" (name opt)))))}
