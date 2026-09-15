@@ -51,6 +51,7 @@ The tasks here are personal utilities — they may or may not be useful to anyon
 | `clj` | Switch between deps-clj and Homebrew Clojure installations | |
 | `java` | Get help with switching beteen Java mejor versions via SDKMAN | |
 | `config` | Commit and push dotfile/config repos | |
+| `cursor-sync` | Export or install pinned Cursor extensions | Uses `extensions.txt` in Cursor’s User directory |
 | `loc` | Count lines of code (wraps `cloc`) | |
 | `bb-nrepl` | Start a Babashka nREPL server (random port) | Writes port to `./bb/.nrepl-port`; optional `--port <n>` |
 
@@ -84,6 +85,27 @@ bbg bb master
 
 And just `bbg bb` gives you status of what you are using and what is available.
 
+### cursor-sync
+
+Record installed extensions on the source Mac:
+
+```sh
+bbg cursor-sync --export
+```
+
+This writes a sorted `extensions.txt` to `~/Library/Application Support/Cursor/User`, alongside settings and keybindings in the `cursor-user` repository. Each entry pins a version, such as `betterthantomorrow.calva@2.0.598`. Commit and push that file with your settings, then pull the repo on the other Mac.
+
+Preview and apply the manifest there:
+
+```sh
+bbg cursor-sync --import --dry-run
+bbg cursor-sync --import
+```
+
+Import installs missing extensions and changes differing versions to match the manifest, including downgrades. Extra local extensions stay installed. Unavailable versions are reported as failures; install those from a trusted VSIX and rerun import. The task verifies the installed versions after applying the plan.
+
+Use `--file PATH` for another manifest and `--cursor PATH` for another Cursor executable. The task handles the default Cursor installation and User directory on macOS. It does not commit, push, pull, or transfer extension settings, authentication, or enablement state.
+
 ### bb-nrepl
 
 Afaik, `bb` does not write an `.nrepl-port` that nREPL clients can use for knowing where to connect. `bbg bb-nrepl` exists to fix that. If you are a [Calva](https://calva.io) user, by defaul, Calva will look for Babashka's port file in `<project-root>/bb/.nrepl`, so that's where this task puts it. (Albeit, if you are using Calva Jack-in to start and connect the Babashka repl, you don't need this task, Calva will figure out the port anyway.)
@@ -94,18 +116,25 @@ There are some hidden tasks to aid in development of tasks and bbg:
 
 | Task | What it does | Notes |
 |------|-------------|-------|
-| `-bbg:test:unit` | Run unit tests | Only `mdq` for now |
+| `-bbg:test:unit` | Run unit tests | `mdq` and `cursor-sync` |
 | `-bbg:test:e2e` | Run E2E tests against TOML spec files | Only `mdq` for now |
 | `-bbg:watch:unit` | Auto-rerun unit tests on file changes | |
 | `-bbg:watch:e2e` | Auto-rerun E2E tests on file changes | |
 
 ### Testing
 
-- **Unit tests** (`bb -bbg:test:unit`) — `clojure.test` tests for core mdq parsing and selector logic
+- **Unit tests** (`bb -bbg:test:unit`) — `clojure.test` tests for mdq and cursor-sync
 - **E2E tests** (`bb -bbg:test:e2e`) — Runs mdq against TOML spec files that define input markdown, CLI args, and expected output
 - **Watch tasks** — `bb -bbg:watch:unit` and `bb -bbg:watch:e2e` rerun on changes to `scripts/`, `test/`, and (for E2E) `dev/test-specs/`
 
 E2E specs live in [dev/test-specs/](dev/test-specs/). The [md_cases/](dev/test-specs/md_cases/) directory caches upstream specs from the Rust mdq project; [local/](dev/test-specs/local/) holds bbg-specific tests. Use `bb e2e-test --refresh` to re-download upstream specs.
+
+Run the Cursor sync tests in the connected REPL:
+
+```clojure
+(require 'cursor-sync-test :reload)
+(clojure.test/run-tests 'cursor-sync-test)
+```
 
 ### Agent Configuration
 

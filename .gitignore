@@ -10,3 +10,7 @@ output.calva-repl
 **/.calva/repl.calva-repl
 
 dev/test-specs/md_cases/
+.calva/mcp-server/port
+.joyride/mcp-server/port
+.clj-kondo/imports/
+.portal/vs-code.edn

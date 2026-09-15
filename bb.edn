@@ -8,6 +8,7 @@
              assoc-exts
              bb-man
              config-save
+             cursor-sync
              deps-clj-as-clojure
              java-version
              loc
@@ -39,6 +40,9 @@
           :task (config-save/exec! (cli/parse-opts *command-line-args*
                                                    config-save/cli-spec))}
 
+  cursor-sync {:doc "Export or import pinned Cursor extensions [--export | --import] [--dry-run]"
+               :task (cursor-sync/exec! *command-line-args*)}
+
   java {:doc "Manage Java versions"
         :task (java-version/exec! (cli/parse-opts *command-line-args*
                                                   java-version/cli-spec))}
@@ -69,8 +73,8 @@
                                         mdq-e2e-test/cli-spec))}
 
   -bbg:test:unit {:doc "Run tests"
-                  :task (do (require 'mdq-test :reload)
-                            (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test)]
+                  :task (do (require 'mdq-test 'cursor-sync-test :reload)
+                            (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test 'cursor-sync-test)]
                               (System/exit (if (zero? (+ fail error)) 0 1))))}
 
   -bbg:watch:unit {:doc "Watch scripts/ and test/ and re-run unit tests on changes"
@@ -84,6 +88,7 @@
                                              "bb-nrepl"  bb-nrepl/cli-spec
                                              "clj"       deps-clj-as-clojure/cli-spec
                                              "config"    config-save/cli-spec
+                                             "cursor-sync" cursor-sync/cli-spec
                                              "java"      java-version/cli-spec
                                              "mdq"       mdq/cli-spec
                                              "named-du"  named-du/cli-spec
