@@ -63,7 +63,7 @@
     },
     {
       "label": "Dev",
-      "dependsOn": ["BB nREPL", "Watch Unit Tests", "Watch E2E Tests"],
+      "dependsOn": ["bb nREPL server", "Watch Unit Tests", "Watch E2E Tests"],
       "group": {
         "kind": "build",
         "isDefault": true

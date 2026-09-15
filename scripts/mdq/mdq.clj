@@ -2324,7 +2324,7 @@
 
 (defn- format-cli-error
   "Formats a babashka.cli error into a user-friendly message."
-  [{:keys [cause option msg value]} args]
+  [{:keys [cause option msg value implicit-value]} args]
   (let [has-dash-selector? (some #(and (string/starts-with? % "- ")
                                        (not (string/starts-with? % "-- ")))
                                  args)]
@@ -2332,7 +2332,7 @@
       :coerce (if has-dash-selector?
                 (str "Error: selector starting with '-' needs a '--' separator.\n"
                      "  Example: bbg mdq -- '- selector'")
-                (if (string/includes? msg "(implicit) true")
+                (if (or implicit-value (string/includes? msg "(implicit) true"))
                   (str "Error: option --" (name option) " requires a value")
                   (str "Error: invalid value for --" (name option)
                        " (expected " (name (get-in (:spec cli-spec) [option :coerce]))
