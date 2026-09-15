@@ -76,7 +76,7 @@
                                        (swap! calls conj [executable args])
                                        {:exit 0 :out "z.last@2.0.0\na.first@1.0.0\n" :err ""})]
           (with-out-str
-            (sut/exec! ["--export" "--no-dry-run" "--file" (str file) "--cursor" "/custom/cursor"])))
+            (sut/exec! ["--export" "--apply" "--file" (str file) "--cursor" "/custom/cursor"])))
         (is (= "a.first@1.0.0\nz.last@2.0.0\n" (slurp file)))
         (is (= [["/custom/cursor" ["--list-extensions" "--show-versions"]]] @calls))))))
 
@@ -106,7 +106,9 @@
                                          {:exit 1 :out "" :err "unavailable"}
                                          {:exit 0 :out "extra.local@1.0.0\n" :err ""}))]
           (is (thrown? clojure.lang.ExceptionInfo
-                       (with-out-str (sut/exec! ["--import" "--no-dry-run" "--file" (str file)])))))
+                       (with-out-str
+                         (binding [*err* *out*]
+                           (sut/exec! ["--import" "--apply" "--file" (str file)]))))))
         (is (= ["a.failed@1.0.0" "b.later@1.0.0"]
                (mapv second (filter #(= "--install-extension" (first %)) @calls))))))))
 
@@ -125,7 +127,9 @@
                                           :err ""}
                                          {:exit 0 :out "Installed successfully" :err ""}))]
           (is (thrown? clojure.lang.ExceptionInfo
-                       (with-out-str (sut/exec! ["--import" "--no-dry-run" "--file" (str file)])))))
+                       (with-out-str
+                         (binding [*err* *out*]
+                           (sut/exec! ["--import" "--apply" "--file" (str file)]))))))
         (is (= 2 @listings))))))
 
 (deftest invalid-export-preserves-file-test
@@ -199,7 +203,7 @@
                           {:exit 0 :out "ok" :err ""}))]
           (with-out-str
             (reset! result
-                    (sut/exec! ["--import" "--no-dry-run" "--file" (str file)
+                    (sut/exec! ["--import" "--apply" "--file" (str file)
                                 "--cursor" "/fake/cursor"]))))
         (is (= {:installed 2 :verified 2} @result))
         (is (= [["/fake/cursor" ["--list-extensions" "--show-versions"]]

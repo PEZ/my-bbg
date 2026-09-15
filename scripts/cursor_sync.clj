@@ -5,9 +5,8 @@
             [clojure.string :as string]))
 
 (def cli-spec
-  {:coerce {:export :boolean :import :boolean :dry-run :boolean
-            :help :boolean :file :string :cursor :string}
-   :exec-args {:dry-run true}})
+  {:coerce {:export :boolean :import :boolean :apply :boolean
+            :help :boolean :file :string :cursor :string}})
 
 (defn- fail!
   [message data]
@@ -163,13 +162,12 @@
 (defn exec!
   "Exports or applies a version-pinned Cursor extension manifest without Git operations."
   [argv]
-  (let [{:keys [help export dry-run file cursor]} (options argv)]
+  (let [{:keys [help export apply file cursor]} (options argv)]
     (if help
-      (println (str "bbg cursor-sync --export | --import [--no-dry-run]\n"
+      (println (str "bbg cursor-sync --export | --import [--apply]\n"
                     "  --file PATH     Manifest (default: ~/Library/Application Support/Cursor/User/extensions.txt)\n"
                     "  --cursor PATH   Cursor CLI executable\n"
-                    "  --dry-run       Show the plan without writing or installing (default)\n"
-                    "  --no-dry-run    Write the manifest or install pinned versions\n"
+                    "  --apply         Write the manifest or install pinned versions\n"
                     "  --help          Show this help\n\n"
                     "Export records exact installed versions. Import installs missing/different versions,\n"
                     "including downgrades, and retains extra local extensions. Dry-run is the default.\n"
@@ -177,7 +175,8 @@
                     "Commit/push and pull the manifest separately. This task performs no Git operations."))
       (let [executable (cursor-executable cursor)
             manifest-file (or file (str (fs/path (System/getProperty "user.home")
-                                                "Library/Application Support/Cursor/User/extensions.txt")))]
+                                                "Library/Application Support/Cursor/User/extensions.txt")))
+            dry-run? (not apply)]
         (if export
-          (export! executable manifest-file dry-run)
-          (import! executable manifest-file dry-run))))))
+          (export! executable manifest-file dry-run?)
+          (import! executable manifest-file dry-run?))))))

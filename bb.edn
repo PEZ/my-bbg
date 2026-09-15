@@ -40,7 +40,7 @@
           :task (config-save/exec! (cli/parse-opts *command-line-args*
                                                    config-save/cli-spec))}
 
-  cursor-sync {:doc "Export or import pinned Cursor extensions [--export | --import] [--no-dry-run]"
+  cursor-sync {:doc "Export or import pinned Cursor extensions [--export | --import] [--apply]"
                :task (cursor-sync/exec! *command-line-args*)}
 
   java {:doc "Manage Java versions"
