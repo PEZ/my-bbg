@@ -6,7 +6,8 @@
 
 (def cli-spec
   {:coerce {:export :boolean :import :boolean :dry-run :boolean
-            :help :boolean :file :string :cursor :string}})
+            :help :boolean :file :string :cursor :string}
+   :exec-args {:dry-run true}})
 
 (defn- fail!
   [message data]
@@ -17,7 +18,7 @@
   (let [row (string/trim text)]
     (if (or (string/blank? row) (string/starts-with? row "#"))
       manifest
-      (let [[_ id version] (re-matches #"(?i)([a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9._-]*)@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z.-]+)?(?:\+[0-9a-z.-]+)?)" row)
+      (let [[_ id version] (re-matches #"(?i)([a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9._-]*)@([0-9]+(?:\.[0-9]+){2,}(?:-[0-9a-z.-]+)?(?:\+[0-9a-z.-]+)?)" row)
             normalized-id (some-> id string/lower-case)]
         (when-not id
           (fail! (str "Invalid extension on line " (inc index) ": " row) {:line (inc index)}))
@@ -54,7 +55,7 @@
   (select-keys @(process/process (into [executable] args) {:out :string :err :string})
                [:exit :out :err]))
 
-(defn- installed!
+(defn- installed
   [executable allow-empty?]
   (let [{:keys [exit out err]} (run-cursor! executable ["--list-extensions" "--show-versions"])]
     (when-not (zero? exit)
@@ -62,6 +63,14 @@
     (if (and allow-empty? (string/blank? out))
       (sorted-map)
       (parse-manifest out))))
+
+(defn- read-manifest
+  "Reads a pinned extension manifest, failing if the file is missing."
+  [file]
+  (let [path (str (fs/absolutize (fs/expand-home file)))]
+    (when-not (fs/exists? path)
+      (fail! (str "Manifest file not found: " path) {:file path}))
+    (parse-manifest (slurp path))))
 
 (defn- write-manifest!
   [file manifest]
@@ -74,11 +83,17 @@
         (fs/delete-if-exists temporary)))))
 
 (defn- export!
-  [executable file]
-  (let [manifest (installed! executable false)]
-    (write-manifest! file manifest)
-    (println "Exported" (count manifest) "extensions to" file)
-    {:exported (count manifest) :file file}))
+  [executable file dry-run?]
+  (let [manifest (installed executable false)]
+    (if dry-run?
+      (do
+        (println "Would export" (count manifest) "extensions to" file)
+        (print (render-manifest manifest))
+        {:dry-run true :exported (count manifest) :file file})
+      (do
+        (write-manifest! file manifest)
+        (println "Exported" (count manifest) "extensions to" file)
+        {:exported (count manifest) :file file}))))
 
 (defn- print-plan!
   [plan]
@@ -104,7 +119,7 @@
 (defn- apply-plan!
   [executable desired plan]
   (let [failures (into [] (keep #(install-one! executable %)) plan)
-        remaining (import-plan desired (installed! executable true))]
+        remaining (import-plan desired (installed executable true))]
     (doseq [{:keys [id version installed-version]} remaining]
       (binding [*out* *err*]
         (println (str "Version mismatch for " id ": requested " version
@@ -117,8 +132,8 @@
 
 (defn- import!
   [executable file dry-run?]
-  (let [desired (parse-manifest (slurp (str (fs/expand-home file))))
-        plan (import-plan desired (installed! executable true))]
+  (let [desired (read-manifest file)
+        plan (import-plan desired (installed executable true))]
     (print-plan! plan)
     (if dry-run?
       {:dry-run true :plan plan}
@@ -135,13 +150,11 @@
         (fail! (str "--" (name option) " requires a value.") {})))
     (when (and (not (:help opts)) (= (boolean (:export opts)) (boolean (:import opts))))
       (fail! "Choose exactly one of --export or --import." {}))
-    (when (and (:dry-run opts) (not (:import opts)))
-      (fail! "--dry-run requires --import." {}))
     opts))
 
 (defn- cursor-executable
   [configured]
-  (or configured
+  (or (some-> configured fs/expand-home str)
       (let [bundled "/Applications/Cursor.app/Contents/Resources/app/bin/cursor"]
         (when (fs/exists? bundled) bundled))
       (some-> (fs/which "cursor") str)
@@ -152,17 +165,19 @@
   [argv]
   (let [{:keys [help export dry-run file cursor]} (options argv)]
     (if help
-      (println (str "bbg cursor-sync --export | --import [--dry-run]\n"
-                    "  --file PATH    Manifest (default: ~/Library/Application Support/Cursor/User/extensions.txt)\n"
-                    "  --cursor PATH  Cursor CLI executable\n"
-                    "  --help         Show this help\n\n"
+      (println (str "bbg cursor-sync --export | --import [--no-dry-run]\n"
+                    "  --file PATH     Manifest (default: ~/Library/Application Support/Cursor/User/extensions.txt)\n"
+                    "  --cursor PATH   Cursor CLI executable\n"
+                    "  --dry-run       Show the plan without writing or installing (default)\n"
+                    "  --no-dry-run    Write the manifest or install pinned versions\n"
+                    "  --help          Show this help\n\n"
                     "Export records exact installed versions. Import installs missing/different versions,\n"
-                    "including downgrades, and retains extra local extensions. --dry-run only shows the plan.\n"
+                    "including downgrades, and retains extra local extensions. Dry-run is the default.\n"
                     "Unavailable pinned versions require manual VSIX installation; no version fallback.\n"
                     "Commit/push and pull the manifest separately. This task performs no Git operations."))
       (let [executable (cursor-executable cursor)
             manifest-file (or file (str (fs/path (System/getProperty "user.home")
                                                 "Library/Application Support/Cursor/User/extensions.txt")))]
         (if export
-          (export! executable manifest-file)
+          (export! executable manifest-file dry-run)
           (import! executable manifest-file dry-run))))))

@@ -91,18 +91,19 @@ Record installed extensions on the source Mac:
 
 ```sh
 bbg cursor-sync --export
+bbg cursor-sync --export --no-dry-run
 ```
 
-This writes a sorted `extensions.txt` to `~/Library/Application Support/Cursor/User`, alongside settings and keybindings in the `cursor-user` repository. Each entry pins a version, such as `betterthantomorrow.calva@2.0.598`. Commit and push that file with your settings, then pull the repo on the other Mac.
+`--export --no-dry-run` writes a sorted `extensions.txt` to `~/Library/Application Support/Cursor/User`, alongside settings and keybindings in the `cursor-user` repository. Each entry pins a version, such as `betterthantomorrow.calva@2.0.598`. Commit and push that file with your settings, then pull the repo on the other Mac.
 
 Preview and apply the manifest there:
 
 ```sh
-bbg cursor-sync --import --dry-run
 bbg cursor-sync --import
+bbg cursor-sync --import --no-dry-run
 ```
 
-Import installs missing extensions and changes differing versions to match the manifest, including downgrades. Extra local extensions stay installed. Unavailable versions are reported as failures; install those from a trusted VSIX and rerun import. The task verifies the installed versions after applying the plan.
+`--import --no-dry-run` installs missing extensions and changes differing versions to match the manifest, including downgrades. Extra local extensions stay installed. Unavailable versions are reported as failures; install those from a trusted VSIX and rerun import. The task verifies the installed versions after applying the plan.
 
 Use `--file PATH` for another manifest and `--cursor PATH` for another Cursor executable. The task handles the default Cursor installation and User directory on macOS. It does not commit, push, pull, or transfer extension settings, authentication, or enablement state.
 
