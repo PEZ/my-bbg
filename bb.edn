@@ -16,6 +16,7 @@
              bb-nrepl
              grok-bot-sync
              idea-inbox-backup
+             netlify-read
              skills-sync
              watch)
 
@@ -64,6 +65,9 @@
   skills-sync {:doc "Symlink ~/.agents/skills + ~/.cursor/skills into ~/.claude/skills [--dry-run]"
                :task (skills-sync/exec! *command-line-args*)}
 
+  netlify-read {:doc "Run read-only Netlify API operations <operation> [--data <json>] [--list]"
+                :task (netlify-read/exec! *command-line-args*)}
+
 
 
   -bbg:test:e2e {:doc "Run E2E compatibility tests against Rust mdq specs"
@@ -73,8 +77,8 @@
                                         mdq-e2e-test/cli-spec))}
 
   -bbg:test:unit {:doc "Run tests"
-                  :task (do (require 'mdq-test 'cursor-sync-test :reload)
-                            (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test 'cursor-sync-test)]
+                  :task (do (require 'mdq-test 'cursor-sync-test 'netlify-read-test :reload)
+                            (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test 'cursor-sync-test 'netlify-read-test)]
                               (System/exit (if (zero? (+ fail error)) 0 1))))}
 
   -bbg:watch:unit {:doc "Watch scripts/ and test/ and re-run unit tests on changes"
