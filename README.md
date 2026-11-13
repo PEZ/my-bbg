@@ -54,6 +54,7 @@ The tasks here are personal utilities — they may or may not be useful to anyon
 | `cursor-sync` | Export or install pinned Cursor extensions | Uses `extensions.txt` in Cursor’s User directory |
 | `loc` | Count lines of code (wraps `cloc`) | |
 | `bb-nrepl` | Start a Babashka nREPL server (random port) | Writes port to `./bb/.nrepl-port`; optional `--port <n>` |
+| `clojure-atlas` | Build [clojure-atlas](https://github.com/Bariscanates404/clojure-atlas) graphs, and serve them all to MCP clients from one HTTP server | Needs the `clojure-atlas` CLI |
 
 ### mdq — Markdown Query Tool
 
@@ -111,20 +112,44 @@ Use `--file PATH` for another manifest and `--cursor PATH` for another Cursor ex
 
 Afaik, `bb` does not write an `.nrepl-port` that nREPL clients can use for knowing where to connect. `bbg bb-nrepl` exists to fix that. If you are a [Calva](https://calva.io) user, by defaul, Calva will look for Babashka's port file in `<project-root>/bb/.nrepl`, so that's where this task puts it. (Albeit, if you are using Calva Jack-in to start and connect the Babashka repl, you don't need this task, Calva will figure out the port anyway.)
 
+### clojure-atlas
+
+[clojure-atlas](https://github.com/Bariscanates404/clojure-atlas) gives AI agents a structural map of a Clojure codebase, built with clj-kondo: callers, blast radius, map keys, tests, and more. Its MCP server speaks stdio and reads one graph. With every agent session starting its own server, that's a lot of processes (I often have 10–15 sessions open), and none of them notice when the graph is rebuilt. This task builds the graphs, and serves all of them from one HTTP server.
+
+```sh
+bbg clojure-atlas build --repo ~/Projects/my-app
+bbg clojure-atlas serve
+```
+
+`build` writes the graph to `<repo>/.clojure-atlas/graph.json.gz`. Without `--repo` it builds the current directory. `serve` listens on `127.0.0.1:7979` (or `--port <n>`), and an MCP client reaches a repo's graph at `http://127.0.0.1:7979/mcp?repo=<absolute repo path>`. The first question about a repo starts one clojure-atlas process for its graph, which every session then shares. When the graph is rebuilt, the next question gets a fresh process on the new graph, and the old process finishes what it was asked before it exits. `curl -s http://127.0.0.1:7979/status` lists the graphs that have a process running.
+
+You can run `serve` in several places at once, such as a VS Code task in each window. The first one holds the port, and the others stand by and take over when it stops.
+
+Wiring a project is then an entry in its `.mcp.json`:
+
+```json
+"clojure-atlas": {
+  "type": "http",
+  "url": "http://127.0.0.1:7979/mcp?repo=/Users/you/Projects/my-app"
+}
+```
+
+The `clojure-atlas` CLI isn't on npm. Install it from a clone you have read, with `npm ci`, `npm pack`, and `npm install -g ./clojure-atlas-<version>.tgz`. And add `**/.clojure-atlas/` to your global gitignore, so the graphs stay out of your repos.
+
 ## Development
 
 There are some hidden tasks to aid in development of tasks and bbg:
 
 | Task | What it does | Notes |
 |------|-------------|-------|
-| `-bbg:test:unit` | Run unit tests | `mdq` and `cursor-sync` |
+| `-bbg:test:unit` | Run unit tests | `mdq`, `cursor-sync`, and `clojure-atlas` |
 | `-bbg:test:e2e` | Run E2E tests against TOML spec files | Only `mdq` for now |
 | `-bbg:watch:unit` | Auto-rerun unit tests on file changes | |
 | `-bbg:watch:e2e` | Auto-rerun E2E tests on file changes | |
 
 ### Testing
 
-- **Unit tests** (`bb -bbg:test:unit`) — `clojure.test` tests for mdq and cursor-sync
+- **Unit tests** (`bb -bbg:test:unit`) — `clojure.test` tests for mdq, cursor-sync, and clojure-atlas
 - **E2E tests** (`bb -bbg:test:e2e`) — Runs mdq against TOML spec files that define input markdown, CLI args, and expected output
 - **Watch tasks** — `bb -bbg:watch:unit` and `bb -bbg:watch:e2e` rerun on changes to `scripts/`, `test/`, and (for E2E) `dev/test-specs/`
 

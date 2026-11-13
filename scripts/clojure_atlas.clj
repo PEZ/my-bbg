@@ -189,14 +189,29 @@
            (get "service")))
     (catch Exception _ false)))
 
+(defn- bind!
+  "Starts serving on `port`, or returns nil when something already holds the port."
+  [port]
+  (try (http/run-server #'handler {:ip "127.0.0.1" :port port})
+       (catch java.net.BindException _ nil)))
+
 (defn serve!
-  "Serves the graphs until the process is stopped. Leaves a server already running on `port` be."
+  "Serves the graphs until the process is stopped. While another process serves on `port`, this
+  one stands by, and takes the port over when that process stops, so the server stays up as long
+  as any window runs its serve task."
   [{:keys [port] :or {port default-port}}]
-  (if (serving? port)
-    (println (str "clojure-atlas: already serving on http://127.0.0.1:" port))
-    (do (http/run-server #'handler {:ip "127.0.0.1" :port port})
-        (println (str "clojure-atlas: serving on http://127.0.0.1:" port "/mcp?repo=<absolute repo path>"))
-        @(promise))))
+  (let [url (str "http://127.0.0.1:" port)]
+    (loop [standing-by? false]
+      (if (bind! port)
+        (do (println (str "clojure-atlas: serving on " url "/mcp?repo=<absolute repo path>"))
+            @(promise))
+        (do (when-not standing-by?
+              (println (if (serving? port)
+                         (str "clojure-atlas: standing by; another process serves on " url
+                              ", and this one takes over when it stops")
+                         (str "clojure-atlas: standing by; something else holds port " port))))
+            (Thread/sleep 2000)
+            (recur true))))))
 
 (defn build!
   "Builds the graph of `repo`, the current directory by default."
