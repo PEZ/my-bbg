@@ -38,7 +38,7 @@
        :task (deps-clj-as-clojure/exec! (cli/parse-opts *command-line-args*
                                                         deps-clj-as-clojure/cli-spec))}
 
-  clojure-atlas {:doc "Build a repo's clojure-atlas graph, or serve the graphs over MCP HTTP [build [--repo DIR] | serve [--port 7979]]"
+  clojure-atlas {:doc "Build a repo's clojure-atlas graph, serve the registered graphs over MCP HTTP, or print the header MCP clients send [build [--repo DIR] | serve [--repo DIR] [--port 7979] | headers]"
                  :task (clojure-atlas/exec! (cli/parse-args *command-line-args*
                                                             clojure-atlas/cli-spec))}
 

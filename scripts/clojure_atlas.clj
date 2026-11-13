@@ -1,15 +1,13 @@
 (ns clojure-atlas
-  "Builds clojure-atlas graphs, and serves them to MCP clients over HTTP. Each graph gets one
-  clojure-atlas process, shared by every session that asks about it, and started again when the
-  graph is rebuilt."
+  "Builds clojure-atlas graphs, and keeps one clojure-atlas serve running for every repo a window
+  has registered, started again when a window registers another repo."
   (:require [babashka.fs :as fs]
             [babashka.http-client :as http-client]
             [babashka.process :as p]
             [cheshire.core :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
-            [org.httpkit.server :as http])
-  (:import (java.net URLDecoder)))
+            [clojure.string :as str]))
 
 (def cli-spec
   {:coerce {:repo :string
@@ -17,201 +15,147 @@
 
 (def default-port 7979)
 
-(def settle-ms
-  "How long a rebuilt graph file must be left alone before a server starts on it, so a build that
-  is still writing it is not read halfway."
-  1500)
+(def max-repos
+  "How many repos one clojure-atlas serve takes."
+  32)
 
-(def call-timeout-ms 120000)
+(def atlas-command ["clojure-atlas"])
 
-(defn graph-file [repo]
-  (str (fs/path repo ".clojure-atlas" "graph.json.gz")))
+(defn served-repos
+  "The repos to register with clojure-atlas serve, from the `registry` of repo → when it was last
+  registered: those that still exist according to `exists?`, at most as many as clojure-atlas
+  takes, the most recently registered first, then sorted."
+  [registry exists?]
+  (->> registry
+       (filter (comp exists? key))
+       (sort-by val >)
+       (take max-repos)
+       (map key)
+       sort
+       vec))
 
-(defn- stamp
-  "When the graph file was last written, in epoch ms, or nil when there is no graph."
-  [graph]
-  (when (fs/exists? graph)
-    (.toMillis (fs/last-modified-time graph))))
+(defn serve-command [atlas repos port]
+  (into atlas (concat ["serve" "--port" (str port)]
+                      (mapcat (fn [repo] ["--repo" repo]) repos))))
 
-(defn stale?
-  "Whether a server started on the graph written at `served` should start again for the graph
-  written at `current`, when the time is `now`."
-  [served current now]
-  (boolean (and current
-                (not= served current)
-                (< settle-ms (- now current)))))
+;; The registry: the repos windows have asked to have served, with when each last asked
 
-(defn query-param [query-string k]
-  (some (fn [pair]
-          (let [[pk v] (str/split pair #"=" 2)]
-            (when (= k pk)
-              (URLDecoder/decode (or v "") "UTF-8"))))
-        (some-> query-string (str/split #"&"))))
+(defn- cache-dir []
+  (str (fs/path (or (System/getenv "XDG_CACHE_HOME") (fs/path (fs/home) ".cache")) "clojure-atlas")))
 
-(defn foreign-origin?
-  "Whether a request comes from a web page other than a local one. MCP over HTTP asks servers to
-  refuse those, so a site in a browser can't reach a local server."
-  [origin]
-  (boolean (and origin
-                (not (re-matches #"https?://(localhost|127\.0\.0\.1)(:\d+)?" origin)))))
+(defn registry-file [] (str (fs/path (cache-dir) "bbg-repos.edn")))
 
-(defn error-response [id message]
-  {"jsonrpc" "2.0"
-   "id" id
-   "error" {"code" -32603
-            "message" message}})
+(defn token-file
+  "Where clojure-atlas serve keeps its bearer token, which it creates on its first start."
+  []
+  (str (fs/path (cache-dir) "http-token")))
 
-(defn response-for
-  "The answer to the client's `msg`, from what the clojure-atlas process answered, `res`."
-  [msg res]
-  (let [id (get msg "id")]
-    (case res
-      ::timeout (error-response id "clojure-atlas did not answer in time")
-      ::gone (error-response id "clojure-atlas stopped before it answered; ask again")
-      (assoc res "id" id))))
+(defn- read-registry []
+  (let [f (registry-file)]
+    (or (when (fs/exists? f)
+          (try (edn/read-string (slurp f)) (catch Exception _ nil)))
+        {})))
 
-;; The clojure-atlas processes, one per repo
+(defn register!
+  "Adds `repo` to the registry, so the serving process starts clojure-atlas again with it."
+  [repo]
+  (let [repo (str (fs/canonicalize repo))
+        f (registry-file)
+        tmp (str f "." (random-uuid) ".partial")]
+    (fs/create-dirs (fs/parent f))
+    (spit tmp (pr-str (assoc (read-registry) repo (System/currentTimeMillis))))
+    (fs/move tmp f {:replace-existing true :atomic-move true})
+    repo))
 
-(defonce ^:private servers (atom {}))
-(defonce ^:private next-id (atom 0))
+(defn- current-repos [] (served-repos (read-registry) fs/directory?))
 
-(defn- deliver-responses!
-  "Hands each answer the process writes to the call waiting for it, and tells the calls still
-  waiting when the process ends."
-  [out pending]
-  (with-open [r (io/reader out)]
-    (doseq [line (line-seq r)]
-      (let [msg (try (json/parse-string line) (catch Exception _ nil))
-            id (get msg "id")]
-        (some-> (get @pending id) (deliver msg))
-        (swap! pending dissoc id))))
-  (let [[waiting _] (reset-vals! pending {})]
-    (run! #(deliver % ::gone) (vals waiting))))
+;; Serving: the process that holds the port runs clojure-atlas serve; the others stand by
 
-(defn- start-server! [repo]
-  (let [graph (graph-file repo)
-        proc (p/process ["clojure-atlas" "mcp" "--graph" graph "--repo" repo]
-                        {:err :inherit})
-        pending (atom {})]
-    (future (deliver-responses! (:out proc) pending))
-    {:repo repo
-     :graph graph
-     :stamp (stamp graph)
-     :proc proc
-     :writer (io/writer (:in proc))
-     :pending pending}))
+(defonce ^:private running (atom nil))
 
-(defn- retire!
-  "Closes the process's input, so it ends once it has answered what it was asked."
-  [{:keys [writer proc]}]
-  (try (.close writer) (catch Exception _ nil))
-  (future (Thread/sleep call-timeout-ms)
-          (p/destroy proc)))
+(defn- port-free? [port]
+  (try (with-open [_ (java.net.Socket. "127.0.0.1" (int port))] false)
+       (catch java.net.ConnectException _ true)))
 
-(defn- server-for! [repo]
-  (locking servers
-    (let [current (get @servers repo)]
-      (if (and current
-               (p/alive? (:proc current))
-               (not (stale? (:stamp current) (stamp (:graph current)) (System/currentTimeMillis))))
-        current
-        (do (some-> current retire!)
-            (let [server (start-server! repo)]
-              (swap! servers assoc repo server)
-              server))))))
-
-(defn- call! [{:keys [writer pending]} msg]
-  (let [id (swap! next-id inc)
-        answer (promise)]
-    (swap! pending assoc id answer)
-    (try
-      (locking writer
-        (.write writer (str (json/generate-string (assoc msg "id" id)) "\n"))
-        (.flush writer))
-      (deref answer call-timeout-ms ::timeout)
-      (catch java.io.IOException _
-        ::gone)
-      (finally
-        (swap! pending dissoc id)))))
-
-(defn- answer
-  "The answer to one message from a client, or nil for a notification, which gets none."
-  [repo msg]
-  (when (contains? msg "id")
-    (if (stamp (graph-file repo))
-      (response-for msg (call! (server-for! repo) msg))
-      (error-response (get msg "id")
-                      (str "No clojure-atlas graph at " (graph-file repo)
-                           ". Build it with: bbg clojure-atlas build --repo " repo)))))
-
-(defn status []
-  {"service" "clojure-atlas"
-   "graphs" (for [[repo {:keys [graph stamp proc]}] @servers]
-              {"repo" repo
-               "graph" graph
-               "built" stamp
-               "pid" (.pid (:proc proc))
-               "alive" (p/alive? proc)})})
-
-;; HTTP
-
-(defn- json-response [status body]
-  {:status status
-   :headers {"Content-Type" "application/json"}
-   :body (json/generate-string body)})
-
-(defn- answer-post [repo body]
-  (let [msg (json/parse-string body)
-        answers (if (sequential? msg)
-                  (seq (keep #(answer repo %) msg))
-                  (answer repo msg))]
-    (if answers
-      (json-response 200 answers)
-      {:status 202})))
-
-(defn handler [{:keys [request-method uri query-string headers body]}]
-  (let [repo (query-param query-string "repo")]
-    (cond
-      (and (= :get request-method) (= "/status" uri)) (json-response 200 (status))
-      (not= "/mcp" uri) {:status 404}
-      (foreign-origin? (get headers "origin")) {:status 403}
-      (not= :post request-method) {:status 405 :headers {"Allow" "POST"}}
-      (not (some-> repo fs/absolute?)) {:status 400
-                                        :body "Name the repository with ?repo=<absolute path>"}
-      :else (answer-post (str (fs/canonicalize repo)) (slurp body)))))
-
-(defn- serving? [port]
-  (try
-    (= "clojure-atlas"
-       (-> (http-client/get (str "http://127.0.0.1:" port "/status") {:timeout 2000})
-           :body
-           json/parse-string
-           (get "service")))
-    (catch Exception _ false)))
-
-(defn- bind!
-  "Starts serving on `port`, or returns nil when something already holds the port."
+(defn- atlas-on?
+  "Whether clojure-atlas holds `port`. It answers a request without the token with a challenge
+  that names it."
   [port]
-  (try (http/run-server #'handler {:ip "127.0.0.1" :port port})
-       (catch java.net.BindException _ nil)))
+  (try (-> (http-client/get (str "http://127.0.0.1:" port "/status") {:throw false :timeout 2000})
+           (get-in [:headers "www-authenticate"] "")
+           (str/includes? "clojure-atlas"))
+       (catch Exception _ false)))
+
+(defn- start-atlas! [repos port]
+  (let [proc (p/process (serve-command atlas-command repos port) {:err :pipe :out :inherit})
+        serving (promise)]
+    (future
+      (with-open [r (io/reader (:err proc))]
+        (doseq [line (line-seq r)]
+          (println line)
+          (when (str/starts-with? line "clojure-atlas: serving")
+            (deliver serving true))))
+      (deliver serving false))
+    (reset! running {:proc proc :repos repos :serving serving})))
+
+(defn- stop! [{:keys [proc]}]
+  (p/destroy proc)
+  @proc)
+
+(defn- hold!
+  "Runs clojure-atlas serve on `port` with the registered repos, and starts it again when the
+  registry changes. Returns when clojure-atlas stops, true if it served, and false if it never
+  started serving, such as when it couldn't take the port."
+  [port]
+  (loop [{:keys [proc repos serving] :as atlas} (start-atlas! (current-repos) port)]
+    (if-not (deref serving 60000 false)
+      (do (stop! atlas)
+          false)
+      (do (Thread/sleep 2000)
+          (cond
+            (not (p/alive? proc)) true
+            (not= repos (current-repos)) (do (stop! atlas)
+                                             (recur (start-atlas! (current-repos) port)))
+            :else (recur atlas))))))
+
+(defn- standby-message [port]
+  (cond
+    (atlas-on? port) (str "clojure-atlas: standing by; another clojure-atlas serves on port " port
+                          ", and this one takes over when it stops")
+    (empty? (current-repos)) "clojure-atlas: standing by; no repos are registered yet"
+    :else (str "clojure-atlas: standing by; something else holds port " port)))
 
 (defn serve!
-  "Serves the graphs until the process is stopped. While another process serves on `port`, this
-  one stands by, and takes the port over when that process stops, so the server stays up as long
-  as any window runs its serve task."
-  [{:keys [port] :or {port default-port}}]
-  (let [url (str "http://127.0.0.1:" port)]
-    (loop [standing-by? false]
-      (if (bind! port)
-        (do (println (str "clojure-atlas: serving on " url "/mcp?repo=<absolute repo path>"))
-            @(promise))
-        (do (when-not standing-by?
-              (println (if (serving? port)
-                         (str "clojure-atlas: standing by; another process serves on " url
-                              ", and this one takes over when it stops")
-                         (str "clojure-atlas: standing by; something else holds port " port))))
-            (Thread/sleep 2000)
-            (recur true))))))
+  "Registers `repo`, then serves the registered repos until the process is stopped. While another
+  process holds `port`, this one stands by, and takes over when that process stops, so the server
+  stays up as long as any window runs its serve task."
+  [{:keys [repo port] :or {port default-port}}]
+  (when repo
+    (println "clojure-atlas: registered" (register! repo)))
+  (.addShutdownHook (Runtime/getRuntime) (Thread. #(some-> @running stop!)))
+  (loop [standing-by? false]
+    (if (and (port-free? port) (seq (current-repos)))
+      (let [served? (hold! port)]
+        (if (or served? (not (port-free? port)))
+          (Thread/sleep 2000)
+          (do (println "clojure-atlas: clojure-atlas serve did not start; trying again in 30 s")
+              (Thread/sleep 30000)))
+        (recur false))
+      (do (when-not standing-by?
+            (println (standby-message port)))
+          (Thread/sleep 2000)
+          (recur true)))))
+
+(defn headers!
+  "Prints the Authorization header MCP clients send, as JSON, for a client setting such as Claude
+  Code's headersHelper."
+  []
+  (let [f (token-file)]
+    (if (fs/exists? f)
+      (println (json/generate-string {"Authorization" (str "Bearer " (str/trim (slurp f)))}))
+      (binding [*out* *err*]
+        (println (str "No clojure-atlas token at " f "; start the serve task first"))
+        (System/exit 1)))))
 
 (defn build!
   "Builds the graph of `repo`, the current directory by default."
@@ -224,12 +168,16 @@
   (case (first args)
     "build" (build! opts)
     "serve" (serve! opts)
+    "headers" (headers!)
     (do (println "Usage: bbg clojure-atlas build [--repo DIR]")
-        (println "       bbg clojure-atlas serve [--port 7979]")
-        (println "MCP clients connect to http://127.0.0.1:<port>/mcp?repo=<absolute repo path>"))))
+        (println "       bbg clojure-atlas serve [--repo DIR] [--port 7979]")
+        (println "       bbg clojure-atlas headers")
+        (println "MCP clients connect to http://127.0.0.1:<port>/mcp?repo=<absolute repo path>,")
+        (println "sending the Authorization header that `headers` prints."))))
 
 (comment
-  (def stop (http/run-server #'handler {:ip "127.0.0.1" :port 7980}))
-  (status)
-  (stop)
+  (current-repos)
+  (register! ".")
+  (def serving (future (serve! {:repo "." :port 7980})))
+  (stop! @running)
   :rcf)

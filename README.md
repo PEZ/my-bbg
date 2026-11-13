@@ -54,7 +54,7 @@ The tasks here are personal utilities — they may or may not be useful to anyon
 | `cursor-sync` | Export or install pinned Cursor extensions | Uses `extensions.txt` in Cursor’s User directory |
 | `loc` | Count lines of code (wraps `cloc`) | |
 | `bb-nrepl` | Start a Babashka nREPL server (random port) | Writes port to `./bb/.nrepl-port`; optional `--port <n>` |
-| `clojure-atlas` | Build [clojure-atlas](https://github.com/Bariscanates404/clojure-atlas) graphs, and serve them all to MCP clients from one HTTP server | Needs the `clojure-atlas` CLI |
+| `clojure-atlas` | Build [clojure-atlas](https://github.com/Bariscanates404/clojure-atlas) graphs, and keep one shared clojure-atlas server running for every repo your windows register | Needs the `clojure-atlas` CLI |
 
 ### mdq — Markdown Query Tool
 
@@ -114,23 +114,22 @@ Afaik, `bb` does not write an `.nrepl-port` that nREPL clients can use for knowi
 
 ### clojure-atlas
 
-[clojure-atlas](https://github.com/Bariscanates404/clojure-atlas) gives AI agents a structural map of a Clojure codebase, built with clj-kondo: callers, blast radius, map keys, tests, and more. Its MCP server speaks stdio and reads one graph. With every agent session starting its own server, that's a lot of processes (I often have 10–15 sessions open), and none of them notice when the graph is rebuilt. This task builds the graphs, and serves all of them from one HTTP server.
+[clojure-atlas](https://github.com/Bariscanates404/clojure-atlas) gives AI agents a structural map of a Clojure codebase, built with clj-kondo: callers, blast radius, map keys, tests, and more. Its `clojure-atlas serve` shares the graphs between all your agent sessions over local HTTP (I often have 10–15 sessions open), and picks up a rebuilt graph without restarting them. It serves the repos you name when it starts, though, and I open projects in several VS Code windows at different times. This task fills that gap.
 
 ```sh
 bbg clojure-atlas build --repo ~/Projects/my-app
-bbg clojure-atlas serve
+bbg clojure-atlas serve --repo ~/Projects/my-app
 ```
 
-`build` writes the graph to `<repo>/.clojure-atlas/graph.json.gz`. Without `--repo` it builds the current directory. `serve` listens on `127.0.0.1:7979` (or `--port <n>`), and an MCP client reaches a repo's graph at `http://127.0.0.1:7979/mcp?repo=<absolute repo path>`. The first question about a repo starts one clojure-atlas process for its graph, which every session then shares. When the graph is rebuilt, the next question gets a fresh process on the new graph, and the old process finishes what it was asked before it exits. `curl -s http://127.0.0.1:7979/status` lists the graphs that have a process running.
+`build` writes the graph to `<repo>/.clojure-atlas/graph.json.gz`. Without `--repo` it builds the current directory. `serve --repo` adds the repo to a registry of repos to serve, and then makes sure one `clojure-atlas serve` runs on `127.0.0.1:7979` (or `--port <n>`) with all of them. Run it in several places at once, such as a VS Code task in each window. The one that holds the port starts clojure-atlas again when another window registers a new repo. The others stand by, and take over when it stops.
 
-You can run `serve` in several places at once, such as a VS Code task in each window. The first one holds the port, and the others stand by and take over when it stops.
-
-Wiring a project is then an entry in its `.mcp.json`:
+An MCP client reaches a repo's graph at `http://127.0.0.1:7979/mcp?repo=<absolute repo path>`, with the bearer token clojure-atlas keeps in `~/.cache/clojure-atlas/http-token`. `bbg clojure-atlas headers` prints that header as JSON, which is what Claude Code's `headersHelper` wants, so a project's `.mcp.json` can wire it without the token in the file:
 
 ```json
 "clojure-atlas": {
   "type": "http",
-  "url": "http://127.0.0.1:7979/mcp?repo=/Users/you/Projects/my-app"
+  "url": "http://127.0.0.1:7979/mcp?repo=/Users/you/Projects/my-app",
+  "headersHelper": "bbg clojure-atlas headers"
 }
 ```
 
