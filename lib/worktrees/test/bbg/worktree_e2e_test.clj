@@ -3,6 +3,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
+   [bbg.worktree.config :as config]
    [clojure.edn :as edn]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]))
@@ -138,7 +139,11 @@
                (is (pos? (:exit (bbg project "worktree" "prepare" "foo" "pez/bar"))))
                (is (pos? (:exit (bbg project "worktree" "prepare" "y" "pez/y"))) "A branch that doesn't exist")
                (is (p/alive? listener)))
+             (is (zero? (:exit (bbg project "worktree" "running" "x"))) "running answers through its exit code")
              (is (zero? (:exit (bbg project "worktree" "stop" "x"))))
+             (is (= 1 (:exit (bbg project "worktree" "running" "x"))) "and after a stop")
+             (is (= 1 (:exit (bbg project "worktree" "running" "control"))) "The control is asked the same way")
+             (is (= 2 (:exit (bbg project "worktree" "running" "nope"))) "No such worktree is told apart from a stopped one")
              (is (not (p/alive? listener)) "The worktree's listening process is ended")
              (is (p/alive? idle) "A process in the worktree that listens on nothing is left alone")
              (is (p/alive? outside) "A listening process outside the worktree is left alone")
@@ -249,7 +254,10 @@
      (let [project (small-project! tmp)
            x (str project "/worktrees/x")
            claim-file (str (fs/path project "worktrees" ".state" "shared.claim"))]
-       (is (zero? (:exit (bbg x "claim" "take" "shared" "agent-a"))) "A free claim is taken")
+       (let [{:keys [exit out]} (bbg x "claim" "take" "shared" "agent-a")]
+         (is (zero? exit) "A free claim is taken")
+         (is (= (str "You hold shared, agent-a. Release it with: " (config/runner) " claim release shared agent-a\n") out)
+             "Taking says how to release, with the command it was reached by"))
        (is (= "x" (:claim/checkout (edn/read-string (slurp claim-file))))
            "From inside a worktree, the claim records that worktree")
        (let [{:keys [exit out]} (bbg project "claim" "take" "shared" "agent-b")]

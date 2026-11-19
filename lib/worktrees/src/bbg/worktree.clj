@@ -25,6 +25,7 @@
                   "  items worktree|control|running"
                   "  port [<port-name>] [--worktree <name>]"
                   "  name <branch>"
+                  "  running <name>"
                   "  config"]))
 
 (defn- fail [message data]
@@ -492,6 +493,17 @@
             (write-registry! config (read-registry config))
             (println "The worktree" worktree-name "is removed."))))))
 
+(defn running?
+  "True when the worktree `worktree-name` has a process listening on its ports from its folder. Throws with exit code 2 when there is no such worktree."
+  [config worktree-name]
+  (when (str/blank? worktree-name)
+    (throw (ex-info "Usage: worktree running <name>" {:babashka/exit 2})))
+  (try
+    (check-existing-worktree config worktree-name)
+    (catch clojure.lang.ExceptionInfo e
+      (throw (ex-info (ex-message e) (assoc (ex-data e) :babashka/exit 2)))))
+  (boolean (seq (worktree-pids config worktree-name))))
+
 (defn- cwd []
   (System/getProperty "user.dir"))
 
@@ -511,6 +523,9 @@
       "remove" (remove! config arg)
       "items" (prn (picker-data config (some-> arg keyword)))
       "port" (println (port config (cwd) {:port-name arg :worktree (:worktree opts)}))
+      "running" (if (running? config arg)
+                  (println "The worktree" arg "is running.")
+                  (fail (str "The worktree " arg " isn't running.") {:name arg}))
       "name" (let [{:worktree/keys [problem] worktree-name :worktree/name}
                    (branch-worktree-name arg (contains? config :worktree/control))]
                (if problem

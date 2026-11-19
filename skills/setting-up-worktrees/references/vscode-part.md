@@ -73,23 +73,25 @@ Why: VS Code runs a task with a given label only once at a time, so every label 
 ```clojure
 (defn ^:async start-steps!
   [{:worktree/keys [name] :as worktree} progress]
-  (let [problem (str/trim (await (exec+ "bbg" (into ["worktree" "check"] (prepare-args worktree)) (project-dir))))]
-    (when (seq problem)
-      (throw (js/Error. problem))))
-  (.report progress #js {:message "stopping what runs"})
-  (await (end-tasks+ name))
-  (.report progress #js {:message "preparing the checkout"})
-  (let [exit-code (await (run-to-end+ (prepare-task worktree)))]
-    (when-not (zero? exit-code)
-      (throw (js/Error. (str "Preparing failed. The terminal \"" (:prepare (labels name)) "\" says why.")))))
-  (let [port (await (worktree-port+ name))]                    ;; asks `bbg worktree port <port-name> --worktree <name>`
-    (.report progress #js {:message "starting the JVM"})       ;; PROJECT: the processes a worktree runs
-    (await (vscode/tasks.executeTask (repl-task name port)))
-    (await (wait-for+ "the nREPL server"
-                      #(if-let [nrepl (nrepl-port name)] (port-listening?+ nrepl) false)
-                      (* 5 60 1000)))                         ;; PROJECT: how long the processes take to start
-    (await (connect-through-runtime-page+ name port progress)))
-  :ok)
+  #_{:clj-kondo/ignore [:redundant-do]}
+  (do ;; the do makes every await count, see "An ^:async body awaits only its last form"
+    (let [problem (str/trim (await (exec+ "bbg" (into ["worktree" "check"] (prepare-args worktree)) (project-dir))))]
+      (when (seq problem)
+        (throw (js/Error. problem))))
+    (.report progress #js {:message "stopping what runs"})
+    (await (end-tasks+ name))
+    (.report progress #js {:message "preparing the checkout"})
+    (let [exit-code (await (run-to-end+ (prepare-task worktree)))]
+      (when-not (zero? exit-code)
+        (throw (js/Error. (str "Preparing failed. The terminal \"" (:prepare (labels name)) "\" says why.")))))
+    (let [port (await (worktree-port+ name))]                    ;; asks `bbg worktree port <port-name> --worktree <name>`
+      (.report progress #js {:message "starting the JVM"})       ;; PROJECT: the processes a worktree runs
+      (await (vscode/tasks.executeTask (repl-task name port)))
+      (await (wait-for+ "the nREPL server"
+                        #(if-let [nrepl (nrepl-port name)] (port-listening?+ nrepl) false)
+                        (* 5 60 1000)))                         ;; PROJECT: how long the processes take to start
+      (await (connect-through-runtime-page+ name port progress)))
+    :ok))
 
 (defn- end-tasks+ [name]
   (let [{:keys [repl runtime-page]} (labels name)]
@@ -98,6 +100,8 @@ Why: VS Code runs a task with a given label only once at a time, so every label 
                  (terminate-tasks! [repl runtime-page])
                  (sleep+ 1000))))))
 ```
+
+An `^:async` body awaits only its last form. In an `^:async` function with several body forms, an `await` in a form that isn't the last one isn't waited for, and the function resolves at once. Inside one `do` or `let` every `await` counts. So the body of every `^:async` function with more than one form goes in a `do`, with `#_{:clj-kondo/ignore [:redundant-do]}`, since clj-kondo calls that `do` redundant. Without it, a stop resolves before the processes have ended, and a start prepares while the old tasks still run. Measured: `(defn ^:async f [] (await (sleep 500)) :ok)` resolves in a few milliseconds, and the same body in a `do` in about 500 ms.
 
 Why: the check comes first, so a start that's going to be refused stops nothing. A refused or failed start must leave the other running worktrees alone. Calva is disconnected before its processes are ended, so it doesn't spend time reconnecting to a dying server. Prepare runs as a visible task, so when it fails, git's or npm's reason is in a terminal the human can read, and the error message names that terminal.
 
@@ -297,16 +301,20 @@ Why: `createQuickPick` rather than `showQuickPick`, because the human has to be 
 
 ## 10. Ask bbg, don't read its files
 
-Names, ports and the picker data come from `bbg worktree name <branch>`, `bbg worktree items ...` and `bbg worktree port <port-name> --worktree <name>`, and the check and prepare go through `bbg worktree check|prepare`. Whether a worktree runs comes from `:worktree/running?` in `items`, so the picker and the start agree. Why: a VS Code part that reads the registry or defines the naming rule itself keeps a contract in two languages, and drifts from the commands. The one thing Joyride still reads itself is a worktree's `.nrepl-port`, since that file belongs to the running process rather than to bbg.
+The commands print text, so a port from `bbg worktree port` is a string until the VS Code part parses it, which it does before comparing or storing it.
+
+Names, ports and the picker data come from `bbg worktree name <branch>`, `bbg worktree items ...` and `bbg worktree port <port-name> --worktree <name>`, and the check and prepare go through `bbg worktree check|prepare`. Whether a worktree runs comes from `:worktree/running?` in `items`, or from the exit code of `bbg worktree running <name>`, 0 when it runs, 1 when it doesn't and 2 when there's no such worktree, which also answers for the control, so the picker, the start and the stop agree with bbg's rule. Why: a VS Code part that reads the registry or defines the naming rule itself keeps a contract in two languages, and drifts from the commands. The one thing Joyride still reads itself is a worktree's `.nrepl-port`, since that file belongs to the running process rather than to bbg.
 
 ## 11. Stopping
 
 ```clojure
 (defn ^:async stop! [name]
-  (await (end-tasks+ name))
-  (await (run-to-end+ (stop-task name)))       ;; runs `bbg worktree stop <name>`
-  (await (wait-for+ "the JVM to stop" #(.then (running?+ name) not) (* 60 1000)))
-  :ok)
+  #_{:clj-kondo/ignore [:redundant-do]}
+  (do ;; the do makes every await count
+    (await (end-tasks+ name))
+    (await (run-to-end+ (stop-task name)))       ;; runs `bbg worktree stop <name>`
+    (await (wait-for+ "the processes to stop" #(.then (running?+ name) not) (* 60 1000)))
+    :ok))
 ```
 
 Why: it resolves only once the port no longer answers, so a start right after a stop finds the worktree stopped. `bbg worktree stop` ends a process only when its working folder is that worktree, so it never ends the main checkout's process by mistake.

@@ -132,6 +132,16 @@
     (fail (str "No " file-name " in " (fs/canonicalize cwd) " or any folder above it.")
           {:cwd (str cwd)})))
 
+(defn runner
+  "Returns how the commands were reached: `bbg` through bbg's own bb.edn, else `bb`."
+  []
+  (let [bbg-edn (fs/path (fs/home) ".config" "bbg" "bb.edn")
+        running-edn (System/getProperty "babashka.config")]
+    (if (and running-edn (fs/exists? bbg-edn) (fs/exists? running-edn)
+             (= (str (fs/canonicalize bbg-edn)) (str (fs/canonicalize running-edn))))
+      "bbg"
+      "bb")))
+
 (defn valid-name?
   "True when `a-name`, of a worktree, lock or claimed resource, is letters, digits, dots, dashes and underscores, and doesn't start with a dot."
   [a-name]

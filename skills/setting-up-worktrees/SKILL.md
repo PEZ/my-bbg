@@ -102,7 +102,7 @@ When worktrees share a database, a broker or other resources with the main check
 
 - **A command only one checkout may run at a time,** such as an E2E suite on a fixed port or a build reusing one Docker image tag, runs through `bbg lock <lock> -- <command>`. The lock is an OS file lock, released when the process ends, so a crash leaves nothing behind. Without `--worktree`, the command runs in the checkout that holds the working folder. `lock` passes the command's exit code through, and environment variables set around the call reach the command.
 
-  Keep the task's name by moving its body to a private task and wrapping that, so the wrapper doesn't call itself:
+  Keep the task's name by moving its body to a private task and wrapping that, so the wrapper doesn't call itself. `shell` takes the command vector through `:cmd`, not as a plain argument:
 
   ```clojure
   -test:e2e {:task (e2e/run! *command-line-args*)}
@@ -116,7 +116,7 @@ When worktrees share a database, a broker or other resources with the main check
 
 ## Step 6: Build the VS Code part
 
-The VS Code part is one Joyride namespace in the project's `.joyride/src`, and a few static VS Code tasks that call it. It does what only VS Code can: run a worktree's processes as tasks, show pickers and progress, connect Calva, and give agents functions to start worktrees with. It asks the commands for everything about checkouts: `bbg worktree name|check|prepare|stop|items|port`. It never reads the registry or defines the naming rule itself.
+The VS Code part is one Joyride namespace in the project's `.joyride/src`, and a few static VS Code tasks that call it. It does what only VS Code can: run a worktree's processes as tasks, show pickers and progress, connect Calva, and give agents functions to start worktrees with. It asks the commands for everything about checkouts: `bbg worktree name|check|prepare|stop|running|items|port`. It never reads the registry or defines the naming rule itself.
 
 Record the bbg commit you build from in the namespace's docstring, `git -C ~/.config/bbg rev-parse --short HEAD`, so the part can be brought up to date later.
 
@@ -169,6 +169,7 @@ worktree remove <name>                                    ; lists what goes, ask
 worktree items worktree|control|running                   ; EDN for pickers
 worktree port [<port-name>] [--worktree <name>]           ; the port name is needed when there are several
 worktree name <branch>                                    ; the name a branch's worktree gets, or why none can
+worktree running <name>                                   ; exits 0 when it runs, 1 when it doesn't, 2 when there's no such worktree
 worktree config
 lock <lock> [--worktree <name>] -- <command> [<arg>...]
 claim take <resource> <who> [--worktree <name>] [--minutes 30]

@@ -107,7 +107,9 @@
   (let [file (claim-file! config resource)
         checkout (or worktree (config/checkout-name config (str (fs/canonicalize cwd))) "source")]
     (case (claim! file who checkout (System/currentTimeMillis) (* 60 1000 (or minutes default-minutes)))
-      :claimed (do (println "You hold" resource (str ", " who ".") "Release it with: claim release" resource who) 0)
+      :claimed (do (println (str "You hold " resource ", " who ". Release it with: "
+                                 (config/runner) " claim release " resource " " who))
+                   0)
       :held (do (println (describe resource (read-claim file)) "Wait, and claim it again.") 1))))
 
 (defn release-claim!
