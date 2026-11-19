@@ -1,5 +1,6 @@
-{:paths ["scripts" "scripts/mdq" "test"]
+{:paths ["scripts" "scripts/mdq" "test" "lib/worktrees/test"]
  :deps {org.babashka/cli {:mvn/version "0.2.23"}
+        bbg/worktrees {:local/root "lib/worktrees"}
         instaparse/instaparse {:git/url "https://github.com/Engelberg/instaparse"
                                :git/sha "08a3580c9deab63727bfe11b1475d90d6147a3fe"}}
  :pods {org.babashka/fswatcher {:version "0.0.7"}}
@@ -19,7 +20,8 @@
              idea-inbox-backup
              netlify-read
              skills-sync
-             watch)
+             watch
+             [bbg.worktree])
 
   loc {:doc "Count lines of code [path...] (excludes generated files, markdown, vendor)"
        :task (loc/count! *command-line-args*)}
@@ -70,6 +72,9 @@
   skills-sync {:doc "Symlink ~/.agents/skills + ~/.cursor/skills into ~/.claude/skills [--dry-run]"
                :task (skills-sync/exec! *command-line-args*)}
 
+  worktree {:doc "Read a project's worktrees.edn [config]"
+            :task (bbg.worktree/exec! *command-line-args*)}
+
   netlify-read {:doc "Run read-only Netlify API operations <operation> [--data <json>] [--list]"
                 :task (netlify-read/exec! *command-line-args*)}
 
@@ -82,13 +87,15 @@
                                         mdq-e2e-test/cli-spec))}
 
   -bbg:test:unit {:doc "Run tests"
-                  :task (do (require 'mdq-test 'cursor-sync-test 'netlify-read-test 'clojure-atlas-test :reload)
-                            (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test 'cursor-sync-test 'netlify-read-test 'clojure-atlas-test)]
+                  :task (do (require 'mdq-test 'cursor-sync-test 'netlify-read-test 'clojure-atlas-test
+                                     'bbg.worktree.config-test :reload)
+                            (let [{:keys [fail error]} (clojure.test/run-tests 'mdq-test 'cursor-sync-test 'netlify-read-test 'clojure-atlas-test
+                                                                               'bbg.worktree.config-test)]
                               (System/exit (if (zero? (+ fail error)) 0 1))))}
 
-  -bbg:watch:unit {:doc "Watch scripts/ and test/ and re-run unit tests on changes"
+  -bbg:watch:unit {:doc "Watch scripts/, test/ and lib/ and re-run unit tests on changes"
                    :task (watch/watch! "Unit Tests" "bb -bbg:test:unit"
-                                       ["scripts" "test"]
+                                       ["scripts" "test" "lib"]
                                        {:extensions [".clj"]})}
 
   -bbg:task-options {:requires ([mdq])
@@ -104,7 +111,8 @@
                                              "named-du"  named-du/cli-spec
                                              "grok-bot-sync" grok-bot-sync/cli-spec
                                              "idea-inbox-backup" idea-inbox-backup/cli-spec
-                                             "skills-sync" skills-sync/cli-spec}]
+                                             "skills-sync" skills-sync/cli-spec
+                                             "worktree"  bbg.worktree/cli-spec}]
                              (doseq [opt (-> (get task-specs (first *command-line-args*))
                                              :coerce keys)]
                                (println (str "--" (name opt)))))}
