@@ -16,7 +16,7 @@ The terms used here are in bbg's language file, `~/Projects/bbg/development/lang
 
 ## Before you start
 
-Read the project's AGENTS.md, its `bb.edn`, its build and test tasks, and its `.vscode/tasks.json`. Find out what runs when someone works on the project: watchers, REPL servers, app servers, and which ports they use. Then ask PEZ about the choices that are the project's own, with what you found as context:
+Read the project's AGENTS.md, its `bb.edn`, its build and test tasks, and its `.vscode/tasks.json`. Find out what runs when someone works on the project: watchers, REPL servers, app servers, and which ports they use. Some REPLs are served by Calva itself rather than by a process of the project, such as a Scittle REPL whose websocket server listens in the VS Code process. Those aren't a worktree's to run, so leave them out of what you suggest. Then ask PEZ about the choices that are the project's own, with what you found as context:
 
 1. What should run for each worktree? Say what runs in the main checkout today, and suggest what a worktree needs. Agents in a worktree run tests themselves, so a test watcher is often left out.
 2. Should the project have a control, and what would PEZ compare with it?
@@ -28,9 +28,9 @@ Ask everything you can't find out from the code in one go, and suggest an answer
 
 ## Step 1: Reach the commands through bbg, or depend on the library
 
-**Through bbg.** For a project only PEZ works on. The commands are `bbg worktree`, `bbg lock` and `bbg claim`, and a fix in bbg reaches the project at once. Nothing goes in the project's `bb.edn`.
+**Through bbg.** For a project where only PEZ uses the worktrees. The commands are `bbg worktree`, `bbg lock` and `bbg claim`, and a fix in bbg reaches the project at once. Nothing goes in the project's `bb.edn`. A public project can go this way too, as long as its tasks keep working for people without bbg: the lock wrapper in step 5 then runs the task directly when `bbg` isn't on the PATH.
 
-**As a git dep.** For a project whose VS Code part or tasks others use without bbg, such as a public one. The project's `bb.edn` depends on the bbg repo, and gets a fix when it moves to a newer commit:
+**As a git dep.** For a project whose VS Code part or worktrees others use without bbg. The project's `bb.edn` depends on the bbg repo, and gets a fix when it moves to a newer commit:
 
 ```clojure
 {:deps {bbg/worktrees {:git/url "https://github.com/PEZ/my-bbg"
@@ -83,6 +83,8 @@ Choose port ranges that don't meet the main checkout's numbers or each other's i
 
 Check it with `bbg worktree config`, which prints the config with its defaults, or what is wrong with it.
 
+Commit `worktrees.edn` in the in-project layout. `lock` and `claim` read it too, and refuse in a checkout with no config in or above its folder, such as a fresh clone.
+
 All state lives in `.state` inside the worktrees folder: the registry of each worktree's ref and ports, and the lock and claim files. Prepare adds the worktrees folder, shared folders and Claude Code files to git's exclude file, so the project's `.gitignore` needs nothing.
 
 ## Step 3: Let the project's tasks take their ports
@@ -112,6 +114,17 @@ When worktrees share a database, a broker or other resources with the main check
                                         :cmd (into ["bbg" "lock" "e2e" "--" "bb" "-test:e2e"]
                                                    *command-line-args*)})))}
   ```
+
+  In a project reached through bbg that others use without it, the wrapper runs the task directly when `bbg` isn't on the PATH, since they have no worktrees to take turns with:
+
+  ```clojure
+  test:e2e {:doc "Run the E2E tests, one checkout at a time when bbg is there"
+            :task (let [task (into ["bb" "-test:e2e"] *command-line-args*)
+                        cmd (if (babashka.fs/which "bbg")
+                              (into ["bbg" "lock" "e2e" "--"] task)
+                              task)]
+                    (System/exit (:exit (babashka.process/shell {:continue true :cmd cmd}))))}
+  ```
 - **A check that writes shared data and restores it** takes a claim first: `bbg claim take <resource> <who>`, then `bbg claim release <resource> <who>`. A claim goes stale after 30 minutes, or `--minutes`. `take` exits 1 and says who holds it when another agent does.
 
 ## Step 6: Build the VS Code part
@@ -120,7 +133,7 @@ The VS Code part is one Joyride namespace in the project's `.joyride/src`, and a
 
 Record the bbg commit you build from in the namespace's docstring, `git -C ~/.config/bbg rev-parse --short HEAD`, so the part can be brought up to date later.
 
-[references/vscode-part.md](references/vscode-part.md) has the pattern, from a version used every day: the start order, why messages stay out of awaited steps, the picker that takes typed values and refreshes in the background, readiness checked from outside, the agent functions that return at once, connecting Calva under the worktree's name, and the runtime page a shadow-cljs project needs to connect. Read it in full before writing the namespace. Build the namespace in the Joyride REPL, piece by piece, and try each piece as you go.
+[references/vscode-part.md](references/vscode-part.md) has the pattern, from a version used every day: the start order, why messages stay out of awaited steps, the picker that takes typed values and refreshes in the background, readiness checked from outside, the agent functions that return at once, connecting Calva under the worktree's name, and the runtime page a shadow-cljs project needs to connect. Read it in full before writing the namespace. Build the namespace in the Joyride REPL, piece by piece, and try each piece as you go. The Joyride MCP tool's `awaitResult` fails on every promise for now ("No protocol method IWriter.-write"), even one resolving to a string. To see what a promise gives, `.then` it into an atom, end the evaluation on a plain value, and read the atom in a second evaluation.
 
 What to fill in for the project: the processes a worktree runs, with their commands, environment and ports; the Calva connect sequence for each REPL, with project type, aliases, builds and after-connect code; whether a runtime page is needed and which page it opens; the waits; the picker titles; and the control's tasks when there is a control.
 
@@ -137,10 +150,12 @@ In the in-project layout, the worktrees sit inside the project. Git ignores them
 - watchers and compilers (shadow-cljs, squint, tailwind and the like)
 - linters and their caches (clj-kondo, clojure-lsp), and any classpath with `.` on it, such as `:paths ["." ...]` in `bb.edn`, which they index
 - build contexts, such as a Docker build doing `COPY . .`: add the worktrees folder to `.dockerignore`, or every image copies every worktree
-- test runners (Vitest, Jest, Playwright, a Clojure test runner's paths)
-- the editor: `files.watcherExclude` and `search.exclude` in the workspace settings
+- test runners (Vitest, Jest, Playwright, a Clojure test runner's paths). Vitest's watch mode also needs `server.watch.ignored: ['**/worktrees/**']`.
+- the editor: `files.watcherExclude` and `search.exclude` in the workspace settings. In a multi-root `.code-workspace`, the patterns are relative to each folder, as in `"worktrees/**"`.
 
 ## Step 9: Try it
+
+A worktree runs the project's tasks as its own branch has them, while `worktrees.edn` and the VS Code part come from the main checkout. So commit the task changes from steps 3 and 5 first, to the branch the worktree's branch starts from. Until then the worktree's tasks ignore the ports the VS Code part passes and listen on the main checkout's fixed ports, so a start waits for REPLs that never come up on the worktree's ports.
 
 1. `bbg worktree config` prints the config.
 2. `bbg worktree prepare <name> <branch> --new-branch` prepares a worktree, and `bbg worktree port <port-name> --worktree <name>` gives its port.

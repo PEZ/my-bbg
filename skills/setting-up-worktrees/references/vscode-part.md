@@ -101,7 +101,7 @@ Why: VS Code runs a task with a given label only once at a time, so every label 
                  (sleep+ 1000))))))
 ```
 
-An `^:async` body awaits only its last form. In an `^:async` function with several body forms, an `await` in a form that isn't the last one isn't waited for, and the function resolves at once. Inside one `do` or `let` every `await` counts. So the body of every `^:async` function with more than one form goes in a `do`, with `#_{:clj-kondo/ignore [:redundant-do]}`, since clj-kondo calls that `do` redundant. Without it, a stop resolves before the processes have ended, and a start prepares while the old tasks still run. Measured: `(defn ^:async f [] (await (sleep 500)) :ok)` resolves in a few milliseconds, and the same body in a `do` in about 500 ms.
+An `^:async` body awaits only its last form. In an `^:async` function with several body forms, an `await` in a form that isn't the last one isn't waited for, and the function resolves at once. Inside one `do` or `let` every `await` counts. So the body of every `^:async` function with more than one form goes in a `do`, with `#_{:clj-kondo/ignore [:redundant-do]}`, since clj-kondo calls that `do` redundant. Without it, a stop resolves before the processes have ended, and a start prepares while the old tasks still run. Measured: `(defn ^:async f [] (await (sleep 500)) :ok)` resolves in a few milliseconds, and the same body in a `do` in about 500 ms. An `await` inside a `doseq` waits for each item in turn: three 200 ms sleeps in a `doseq` took 600 ms.
 
 Why: the check comes first, so a start that's going to be refused stops nothing. A refused or failed start must leave the other running worktrees alone. Calva is disconnected before its processes are ended, so it doesn't spend time reconnecting to a dying server. Prepare runs as a visible task, so when it fails, git's or npm's reason is in a terminal the human can read, and the error message names that terminal.
 
@@ -182,6 +182,9 @@ Why: a start takes minutes, and VS Code notifications don't reach an agent. Agen
 ## 7. Connecting Calva under the worktree's name
 
 ```clojure
+(defn- worktree-dir [name]
+  (path/join (project-dir) "worktrees" name))                          ;; PROJECT: the main checkout's folder and :worktree/dir
+
 (defn- connect! [name port]
   (vscode/commands.executeCommand
    "calva.connect"
@@ -190,7 +193,7 @@ Why: a start takes minutes, and VS Code notifications don't reach an agent. Agen
              :connectSequence {:name name
                                :projectType "deps.edn"                  ;; PROJECT
                                :cljsType "shadow-cljs"                  ;; PROJECT
-                               :projectRootPath ["worktrees" name]      ;; PROJECT: where worktrees live
+                               :projectRootPath [(worktree-dir name)]   ;; PROJECT: the worktree's folder, absolute
                                :autoSelectForConnect true
                                :menuSelections {:cljAliases ["dev" "test"]          ;; PROJECT
                                                 :cljsLaunchBuilds ["app"]           ;; PROJECT
@@ -208,18 +211,33 @@ Why: a start takes minutes, and VS Code notifications don't reach an agent. Agen
     (js/Promise.resolve nil)))
 ```
 
-Why: the session names carry the worktree's name, so agents and the human always know which checkout an evaluation goes to, and the main checkout's sessions are never touched. `replSessionFilePatterns` together with `projectRootPath` route evaluations from the worktree's files to its own sessions. A connection is found again through Calva's API by its session keys. A project with several REPLs per worktree, such as a Babashka nREPL beside a Squint one, makes one connect per REPL, each with its own pair of session names.
+Why: the session names carry the worktree's name, so agents and the human always know which checkout an evaluation goes to, and the main checkout's sessions are never touched. Name them `<worktree>-<the main checkout's session name>`, so the main checkout's session names map to the worktree's by a prefix. `projectRootPath` is the worktree's absolute folder, since a relative path resolves against the first workspace folder, which in a multi-root workspace may not be the project's. A connection is found again through Calva's API by its session keys. A project with several REPLs per worktree, such as a Babashka nREPL beside a Squint one, makes one connect per REPL, each with its own session names.
+
+`replSessionFilePatterns` together with `projectRootPath` route evaluations from the worktree's files to its own sessions. A worktree in the in-project layout sits inside the main checkout's root, so the main checkout's sessions match its files too. Calva picks the session this way: first by tier (patterns that always claim a file, then patterns that are a fallback for it, then the catch-all of each connection's root), then, within a tier, the pattern with the most literal folders in its path, then the earlier connection. A worktree's patterns are its root plus the file pattern, two folders deeper than the main checkout's, so they win, as long as the worktree's sequence gives the same file patterns in the same tiers as the main checkout's does. A pattern starting with `**/` isn't tied to a root, so in the worktree's sequence drop the `**/`: `**/*.bb` becomes `*.bb`. Calva then roots it at the worktree, and it outscores the main checkout's pattern in the same tier.
 
 ### Several REPLs per worktree
 
 A worktree that runs several REPL servers, such as a Babashka nREPL beside a Squint one, makes one Calva connection per server. Start from the project's own `calva.replConnectSequences` in its workspace settings, which already connect to the main checkout, and for each one:
 
-- Keep its `projectType` and menu selections.
-- Set `projectRootPath` to the worktree's folder, given relative to the workspace folder the sequence lives in, the same way the existing sequence gives the main checkout's.
-- Name its sessions `<worktree>-<repl>`, such as `x-bb`, and keep the existing sequence's file patterns so evaluations route by file type.
+- Keep its `projectType`, menu selections and file patterns.
+- Set `projectRootPath` to the worktree's absolute folder.
+- Name its sessions with the worktree's name as a prefix, such as `x-babashka-repl` beside the main checkout's `babashka-repl`.
 - Pass the port from `bbg worktree port <port-name> --worktree <name>`, rather than having Calva read a port file.
 
-`disconnect+` then finds a worktree's connections by any of its session keys, not only `<name>-clj`, and disconnects each. When the project already has a Joyride script that connects its REPLs, extend that script with the worktree's name and ports rather than writing a second one.
+Several processes and no `.nrepl-port` to go by fit two tables, which keep the rest of the namespace short. A keyword in a process's arguments is replaced with the worktree's port of that name:
+
+```clojure
+(def processes                                                          ;; PROJECT
+  [{:process/label "Squint Watch" :process/args ["bb" "watch"]}
+   {:process/label "Squint REPL" :process/args ["bb" "squint-nrepl" :squint-nrepl]}
+   {:process/label "Babashka REPL" :process/args ["bb" "nrepl-server" :bb-nrepl]}])
+
+(def repls                                                              ;; PROJECT
+  [{:repl/port :squint-nrepl :repl/project-type "squint" :repl/session "squint-repl"}
+   {:repl/port :bb-nrepl :repl/project-type "babashka" :repl/session "babashka-repl"}])
+```
+
+The task labels, the ports to wait on, the connects and the session keys then all come from these tables. `disconnect+` finds a worktree's connections by any of its session keys and disconnects each. When the project already has a Joyride script that connects its REPLs, extend that script with the worktree's name and ports rather than writing a second one.
 
 ## 8. Connecting through a runtime page (shadow-cljs only)
 
@@ -321,4 +339,4 @@ Why: it resolves only once the port no longer answers, so a start right after a 
 
 ## What a project fills in
 
-The processes a worktree runs, and their commands, environment and ports. Where the worktrees live (`projectRootPath`). The Calva connect sequence or sequences, with project type, aliases, builds and after-connect code. Whether a runtime page is needed, which page it opens, and where Playwright is. The timeouts. The remote and the source checkout for the fetch. The picker titles. Whether there's a control, and so its two extra tasks and its ref picker.
+The processes a worktree runs, and their commands, environment and ports. The worktree's absolute folder (`projectRootPath`). The Calva connect sequence or sequences, with project type, aliases, builds and after-connect code. Whether a runtime page is needed, which page it opens, and where Playwright is. The timeouts. The remote and the source checkout for the fetch. The picker titles. Whether there's a control, and so its two extra tasks and its ref picker.
