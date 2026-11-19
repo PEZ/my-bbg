@@ -205,6 +205,13 @@
   [cwd path]
   (= (str cwd) (str path)))
 
+(defn listener-kind
+  "Returns `:own` for a listening process working in the worktree folder `path`, `:exiting` for one on a registry port whose working folder can't be read, as when it is shutting down, else nil."
+  [{:keys [cwd path registry-port?]}]
+  (cond
+    (worktree-process? cwd path) :own
+    (and (nil? cwd) registry-port?) :exiting))
+
 (defn args->opts
   "Returns the prepare options from the command-line `args`: the name, the ref, and the flags `--new-branch` and `--detach`."
   [args]
@@ -259,16 +266,22 @@
     (distinct (concat (when (fs/exists? port-file) [(str/trim (slurp (str port-file)))])
                       (map str (vals (get-in registry [worktree-name :worktree/ports])))))))
 
-(defn- worktree-pids
-  "Returns the pids of the processes listening on the worktree's ports whose working folder is the worktree."
+(defn- worktree-listeners
+  "Returns the processes listening on the worktree's ports that are the worktree's, each as `{:pid ... :kind :own|:exiting}`."
   ([config worktree-name]
-   (worktree-pids config (read-registry config) worktree-name))
+   (worktree-listeners config (read-registry config) worktree-name))
   ([config registry worktree-name]
-   (let [path (fs/canonicalize (worktree-path config worktree-name))]
+   (let [path (fs/canonicalize (worktree-path config worktree-name))
+         registry-ports (set (map str (vals (get-in registry [worktree-name :worktree/ports]))))]
      (->> (worktree-ports config registry worktree-name)
-          (mapcat listening-pids)
-          distinct
-          (filter #(worktree-process? (process-cwd %) path))
+          (reduce (fn [pid->ports port]
+                    (reduce #(update %1 %2 (fnil conj #{}) port) pid->ports (listening-pids port)))
+                  {})
+          (keep (fn [[pid pid-ports]]
+                  (when-let [kind (listener-kind {:cwd (process-cwd pid)
+                                                  :path path
+                                                  :registry-port? (boolean (some registry-ports pid-ports))})]
+                    {:pid pid :kind kind})))
           vec))))
 
 (defn- alive? [pid]
@@ -287,17 +300,27 @@
       (fail (str "There is no worktree " worktree-name " at " path ".") {:name worktree-name}))
     path))
 
-(defn- stop-pids! [worktree-name pids]
-  (println "Stopping the processes of worktree" worktree-name "- pids" (str/join " " pids))
-  (doseq [pid pids] (p/sh "kill" pid))
-  (loop [tries 60]
-    (cond
-      (not-any? alive? pids) (do (println "The processes of worktree" worktree-name "have stopped.") pids)
-      (zero? tries) (fail (str "The processes of worktree " worktree-name " did not stop within 30 seconds") {:pids pids})
-      :else (do (Thread/sleep 500) (recur (dec tries))))))
+(defn- stop-listeners!
+  "Ends the worktree's own `listeners`, and waits until they have exited and none of its listeners are left, the exiting ones included. Gives up after 30 seconds."
+  [config worktree-name listeners]
+  (let [pids (mapv :pid listeners)
+        own (keep #(when (= :own (:kind %)) (:pid %)) listeners)
+        deadline (+ (System/currentTimeMillis) 30000)]
+    (println "Stopping the processes of worktree" worktree-name "- pids" (str/join " " pids))
+    (doseq [pid own]
+      (p/sh "kill" pid))
+    (loop []
+      (cond
+        (and (not-any? alive? own) (empty? (worktree-listeners config worktree-name)))
+        (do (println "The processes of worktree" worktree-name "have stopped.") pids)
+
+        (> (System/currentTimeMillis) deadline)
+        (fail (str "The processes of worktree " worktree-name " did not stop within 30 seconds") {:pids pids})
+
+        :else (do (Thread/sleep 500) (recur))))))
 
 (defn stop!
-  "Stops the processes of the worktree `name` that listen on its ports, when any run, and waits for them to end. Returns their pids, or nil when none ran."
+  "Stops the processes of the worktree `name` that listen on its ports, when any run, and waits until none are left, including ones already shutting down. Returns their pids, or nil when none ran."
   [config worktree-name]
   (when (str/blank? worktree-name)
     (fail "Usage: worktree stop <name>" {}))
@@ -305,8 +328,8 @@
     (fail (str "No worktree can be named " worktree-name ".") {:name worktree-name}))
   (when (fs/exists? (worktree-path config worktree-name))
     (check-existing-worktree config worktree-name)
-    (when-let [pids (not-empty (worktree-pids config worktree-name))]
-      (stop-pids! worktree-name pids))))
+    (when-let [listeners (not-empty (worktree-listeners config worktree-name))]
+      (stop-listeners! config worktree-name listeners))))
 
 (defn- link-state [path]
   (cond
@@ -410,7 +433,7 @@
 (defn- running-names
   "Returns the names of the worktrees in `registry` whose processes run."
   [config registry]
-  (set (filter #(seq (worktree-pids config registry %)) (keys registry))))
+  (set (filter #(seq (worktree-listeners config registry %)) (keys registry))))
 
 (defn- refs [{:worktree/keys [source]} & patterns]
   (some-> (apply sh-out "git" "-C" source "for-each-ref" "--sort=-committerdate" "--format=%(refname:short)" patterns)
@@ -478,7 +501,7 @@
           info {:name worktree-name
                 :path path
                 :branch branch
-                :pids (worktree-pids config worktree-name)
+                :pids (mapv :pid (worktree-listeners config worktree-name))
                 :only-here (when branch
                              (sh-out "git" "-C" source "log" "--oneline" branch
                                      "--not" (str "--exclude=refs/heads/" branch) "--branches" "--remotes" "--"))}]
@@ -494,7 +517,7 @@
             (println "The worktree" worktree-name "is removed."))))))
 
 (defn running?
-  "True when the worktree `worktree-name` has a process listening on its ports from its folder. Throws with exit code 2 when there is no such worktree."
+  "True when the worktree `worktree-name` has a process listening on its ports from its folder, or one on its registry ports that is shutting down. Throws with exit code 2 when there is no such worktree."
   [config worktree-name]
   (when (str/blank? worktree-name)
     (throw (ex-info "Usage: worktree running <name>" {:babashka/exit 2})))
@@ -502,7 +525,7 @@
     (check-existing-worktree config worktree-name)
     (catch clojure.lang.ExceptionInfo e
       (throw (ex-info (ex-message e) (assoc (ex-data e) :babashka/exit 2)))))
-  (boolean (seq (worktree-pids config worktree-name))))
+  (boolean (seq (worktree-listeners config worktree-name))))
 
 (defn- cwd []
   (System/getProperty "user.dir"))

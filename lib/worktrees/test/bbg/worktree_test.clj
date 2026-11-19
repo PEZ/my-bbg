@@ -141,6 +141,16 @@
   (is (false? (worktree/worktree-process? nil "/x/worktrees/a"))
       "A process whose folder can't be read is not the worktree's"))
 
+(deftest listeners-of-a-worktree
+  (is (= :own (worktree/listener-kind {:cwd "/x/worktrees/a" :path "/x/worktrees/a" :registry-port? false}))
+      "A process working in the worktree, on its .nrepl-port")
+  (is (= :exiting (worktree/listener-kind {:cwd nil :path "/x/worktrees/a" :registry-port? true}))
+      "A process on one of the worktree's registry ports whose folder can no longer be read is shutting down")
+  (is (nil? (worktree/listener-kind {:cwd nil :path "/x/worktrees/a" :registry-port? false}))
+      "On a stale .nrepl-port, an unreadable folder isn't enough")
+  (is (nil? (worktree/listener-kind {:cwd "/x/source" :path "/x/worktrees/a" :registry-port? true}))
+      "A process working elsewhere is never the worktree's"))
+
 (def worktree-list-porcelain
   "worktree /p/source\nHEAD aaa\nbranch refs/heads/main\n\nworktree /d/worktrees/control\nHEAD bbb\ndetached\n\nworktree /d/worktrees/x\nHEAD ccc\nbranch refs/heads/pez/x\n\nworktree /elsewhere/y\nHEAD ddd\nbranch refs/heads/pez/y\n")
 
