@@ -110,7 +110,11 @@
          (is (str/includes? (:out (bbg project "worktree" "check" "foo" "pez/bar")) "is named bar")
              "A name that isn't the branch's last segment")
          (is (str/blank? (:out (bbg project "worktree" "check" "x" "pez/x")))
-             "Restarting a worktree on its own branch is fine"))
+             "Restarting a worktree on its own branch is fine")
+         (is (= "brand-new\n" (:out (bbg project "worktree" "name" "pez/brand-new")))
+             "The name a branch's worktree would get, before any prepare")
+         (is (= 1 (:exit (bbg project "worktree" "name" "pez/control")))
+             "A branch whose worktree can't have its name"))
        (testing "items and port"
          (let [items (edn/read-string (:out (bbg project "worktree" "items" "worktree")))]
            (is (= "main" (:current-branch items)))

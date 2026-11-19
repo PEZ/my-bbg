@@ -24,6 +24,7 @@
                   "  remove <name>"
                   "  items worktree|control|running"
                   "  port [<port-name>] [--worktree <name>]"
+                  "  name <branch>"
                   "  config"]))
 
 (defn- fail [message data]
@@ -66,6 +67,16 @@
 
       (and taken-by (not= git-ref taken-by))
       (str "The worktree " worktree-name " is on " taken-by ". Remove it, or pick a branch with another last segment."))))
+
+(defn branch-worktree-name
+  "Returns `{:worktree/name ...}` for the worktree a branch would get, or `{:worktree/problem ...}` when no worktree can have that name."
+  [branch control?]
+  (let [worktree-name (when-not (str/blank? branch) (name-of-branch branch))]
+    (if-let [problem (if worktree-name
+                       (name-problem {:name worktree-name :ref branch :registry {} :control? control?})
+                       "Usage: worktree name <branch>")]
+      {:worktree/problem problem}
+      {:worktree/name worktree-name})))
 
 (defn- taken-ports
   "Returns every port number the registry's entries other than `worktree-name` hold, and every configured :control and :main."
@@ -500,6 +511,11 @@
       "remove" (remove! config arg)
       "items" (prn (picker-data config (some-> arg keyword)))
       "port" (println (port config (cwd) {:port-name arg :worktree (:worktree opts)}))
+      "name" (let [{:worktree/keys [problem] worktree-name :worktree/name}
+                   (branch-worktree-name arg (contains? config :worktree/control))]
+               (if problem
+                 (fail problem {:branch arg})
+                 (println worktree-name)))
       (fail usage {}))))
 
 (defn exec!

@@ -10,6 +10,18 @@
   (is (= "hotfix" (worktree/name-of-branch "hotfix"))
       "A branch without a prefix is its own name"))
 
+(deftest names-for-branches
+  (is (= {:worktree/name "x"} (worktree/branch-worktree-name "pez/x" true))
+      "A branch's last segment")
+  (is (= {:worktree/name "new-thing"} (worktree/branch-worktree-name "new-thing" false))
+      "A new branch without a prefix")
+  (is (some? (:worktree/problem (worktree/branch-worktree-name "pez/control" true)))
+      "A branch ending in control can't have a worktree")
+  (is (some? (:worktree/problem (worktree/branch-worktree-name "pez/a&b" false)))
+      "A branch whose last segment isn't a valid name")
+  (is (some? (:worktree/problem (worktree/branch-worktree-name nil false)))
+      "No branch"))
+
 (deftest names-refused
   (is (some? (worktree/name-problem {:name "control" :ref "pez/control" :registry {} :control? true}))
       "A branch ending in control is refused, the name is the control's")

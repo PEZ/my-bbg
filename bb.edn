@@ -74,7 +74,7 @@
   skills-sync {:doc "Symlink ~/.agents/skills + ~/.cursor/skills into ~/.claude/skills [--dry-run]"
                :task (skills-sync/exec! *command-line-args*)}
 
-  worktree {:doc "Prepare, list, stop and remove the worktrees a project's worktrees.edn describes [prepare|check|stop|remove|items|port|config]"
+  worktree {:doc "Prepare, list, stop and remove the worktrees a project's worktrees.edn describes [prepare|check|stop|remove|items|port|name|config]"
             :task (bbg.worktree/exec! *command-line-args*)}
 
   lock {:doc "Run a command in a checkout, one run at a time across a project's checkouts [<lock> [--worktree <name>] -- <command>]"
