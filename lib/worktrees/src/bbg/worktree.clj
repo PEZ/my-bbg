@@ -36,10 +36,7 @@
   [branch]
   (last (str/split branch #"/")))
 
-(defn valid-name?
-  "True when `worktree-name` is letters, digits, dots, dashes and underscores, and doesn't start with a dot."
-  [worktree-name]
-  (boolean (re-matches #"[A-Za-z0-9_-][A-Za-z0-9._-]*" (str worktree-name))))
+(def valid-name? config/valid-name?)
 
 (defn name-problem
   "Returns why the worktree `name` can't take `ref`, or nil. Only the control is detached, and only in a project with one. Any other worktree is named after its branch's last segment, and a name belongs to the branch whose worktree has it."
@@ -242,10 +239,6 @@
                             (when (fs/exists? worktrees-dir)
                               (filter fs/directory? (fs/list-dir worktrees-dir))))))))
 
-(defn- write-registry! [{:worktree/keys [state-dir]} registry]
-  (fs/create-dirs state-dir)
-  (spit (str (fs/path state-dir "registry.edn"))
-        (with-out-str (pprint/pprint (into (sorted-map) registry)))))
 
 (defn- worktree-ports
   "Returns the ports to look for the worktree's processes on: its `.nrepl-port`'s, and its `registry` ports."
@@ -319,14 +312,14 @@
         :keep nil
         :link (fs/create-sym-link target (fs/canonicalize (fs/path source dir)))
         :unlink (fs/delete target)
-        :install (apply p/shell {:dir (str path)} install))
+        :install (p/shell {:dir (str path) :cmd install}))
       (println (str dir ":") (name step)))))
 
 (defn- run-steps! [config path]
   (doseq [[kind & args :as step] (:worktree/prepare config)]
     (case kind
       :share (share! config path step)
-      :run (apply p/shell {:dir (str path)} (first args)))))
+      :run (p/shell {:dir (str path) :cmd (first args)}))))
 
 (defn- give-claude-settings!
   "Links the worktree's `.claude/skills` to the dev folder's, and adds the dev folder to its `.claude/settings.local.json`."
@@ -348,6 +341,17 @@
       (spit (str file) (str (when (and existing (not (str/ends-with? existing "\n"))) "\n")
                             (str/join "\n" missing) "\n")
             :append true))))
+
+(defn state-dir!
+  "Returns the state folder, created, with the exclude lines `config` needs in place."
+  [{:worktree/keys [state-dir] :as config}]
+  (fs/create-dirs state-dir)
+  (exclude! config)
+  state-dir)
+
+(defn- write-registry! [config registry]
+  (spit (str (fs/path (state-dir! config) "registry.edn"))
+        (with-out-str (pprint/pprint (into (sorted-map) registry)))))
 
 (defn- register!
   "Records the worktree `name` at `ref` in the registry, with its ports, and returns the ports. Reads the registry just before writing it, which keeps prepares a few seconds apart from handing out the same port."

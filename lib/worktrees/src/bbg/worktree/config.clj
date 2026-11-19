@@ -132,6 +132,11 @@
     (fail (str "No " file-name " in " (fs/canonicalize cwd) " or any folder above it.")
           {:cwd (str cwd)})))
 
+(defn valid-name?
+  "True when `a-name`, of a worktree, lock or claimed resource, is letters, digits, dots, dashes and underscores, and doesn't start with a dot."
+  [a-name]
+  (boolean (re-matches #"[A-Za-z0-9_-][A-Za-z0-9._-]*" (str a-name))))
+
 (defn checkout-name
   "Returns the name of the worktree whose folder holds `cwd`, or nil for anywhere else."
   [{worktrees-dir :worktree/dir} cwd]

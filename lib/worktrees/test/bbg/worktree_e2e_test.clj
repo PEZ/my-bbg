@@ -196,3 +196,91 @@
        (let [{:keys [exit out err]} (bbg-in dev "y\n" "worktree" "remove" "x")]
          (is (zero? exit) (str out err))
          (is (not (fs/exists? x)) "A worktree with Claude Code links is removed"))))))
+
+(defn- small-project!
+  "Creates an in-project layout with one worktree, x, prepared."
+  [tmp]
+  (let [project (project! (str tmp "/project")
+                          {"worktrees.edn" (pr-str {:worktree/ports {:app {:first (free-port) :main (free-port)}}})})]
+    (bbg project "worktree" "prepare" "x" "pez/x" "--new-branch")
+    project))
+
+(deftest locks
+  (in-temp-dir
+   (fn [tmp]
+     (let [project (small-project! tmp)
+           x (str project "/worktrees/x")
+           log (str tmp "/log")
+           run #(p/process {:dir % :extra-env without-user-git-config}
+                           "bb" "--config" (or (System/getProperty "babashka.config")
+                                               (str (fs/path (fs/home) ".config" "bbg" "bb.edn")))
+                           "lock" "demo" "--"
+                           "sh" "-c" (str "echo start $(basename $PWD) >> " log "; sleep 1; echo end $(basename $PWD) >> " log))
+           a (run project)
+           _ (loop [tries 100]
+               (when (and (pos? tries)
+                          (not (and (fs/exists? log) (str/includes? (slurp log) "start project"))))
+                 (Thread/sleep 100)
+                 (recur (dec tries))))
+           b (run x)]
+       @a @b
+       (let [lines (str/split-lines (slurp log))]
+         (is (= 4 (count lines)))
+         (is (= [["start" "end"] ["start" "end"]] (map #(map (fn [line] (first (str/split line #" "))) %) (partition 2 lines)))
+             "Two runs from two checkouts take turns rather than overlap")
+         (is (= #{"project" "x"} (set (map #(second (str/split % #" ")) lines)))
+             "Each run ran in the checkout it was started from"))
+       (is (= "x" (slurp (str (fs/path project "worktrees" ".state" "demo.lock.holder"))))
+           "The last holder is recorded")
+       (is (= 3 (:exit (bbg project "lock" "demo" "--" "sh" "-c" "exit 3")))
+           "The command's exit code is passed through")
+       (is (str/includes? (:out (bbg project "lock" "demo" "--worktree" "x" "--" "pwd")) "/worktrees/x")
+           "A named worktree overrides the working folder")
+       (is (= "a b\n" (:out (bbg project "lock" "demo" "--" "printf" "%s %s\n" "a" "b")))
+           "The command's words are passed as they are, not split at spaces")))))
+
+(deftest claims
+  (in-temp-dir
+   (fn [tmp]
+     (let [project (small-project! tmp)
+           x (str project "/worktrees/x")
+           claim-file (str (fs/path project "worktrees" ".state" "shared.claim"))]
+       (is (zero? (:exit (bbg x "claim" "take" "shared" "agent-a"))) "A free claim is taken")
+       (is (= "x" (:claim/checkout (edn/read-string (slurp claim-file))))
+           "From inside a worktree, the claim records that worktree")
+       (let [{:keys [exit out]} (bbg project "claim" "take" "shared" "agent-b")]
+         (is (= 1 exit) "Another agent finds it held")
+         (is (str/includes? out "agent-a holds shared in x")))
+       (is (= 1 (:exit (bbg project "claim" "release" "shared" "agent-b"))) "Only the holder releases it")
+       (is (zero? (:exit (bbg project "claim" "release" "shared" "agent-a"))) "The holder releases it")
+       (is (zero? (:exit (bbg project "claim" "take" "shared" "agent-b"))) "The next agent takes it")
+       (is (= "source" (:claim/checkout (edn/read-string (slurp claim-file))))
+           "From the main checkout, the claim records the source")
+       (is (pos? (:exit (bbg project "claim" "take" "../x" "agent-b"))) "A resource name that would leave the state folder")
+       (is (pos? (:exit (bbg project "claim" "take" "other" "agent-b" "--worktree" "../.."))) "A worktree name that would leave the worktrees folder")
+       (is (pos? (:exit (bbg project "lock" "demo" "--worktree" ".state" "--" "true"))) "The state folder is no worktree to run in")))))
+
+(deftest library-as-a-git-dep
+  (in-temp-dir
+   (fn [tmp]
+     (let [bbg-repo (str (fs/parent (or (System/getProperty "babashka.config")
+                                        (str (fs/path (fs/home) ".config" "bbg" "bb.edn")))))
+           sha (str/trim (:out (p/sh {:dir bbg-repo} "git" "rev-parse" "HEAD")))
+           project (project! (str tmp "/project")
+                             {"worktrees.edn" (pr-str {:worktree/ports {:app {:first (free-port)}}})
+                              "bb.edn" (pr-str {:deps {'bbg/worktrees {:git/url (str "file://" bbg-repo)
+                                                                       :git/sha sha
+                                                                       :deps/root "lib/worktrees"}}
+                                                :tasks {'worktree '(bbg.worktree/exec! *command-line-args*)
+                                                        'lock '(System/exit (bbg.lock/exec! *command-line-args*))
+                                                        'claim '(System/exit (bbg.claim/exec! *command-line-args*))
+                                                        :requires '([bbg.worktree] [bbg.lock] [bbg.claim])}})})
+           bb #(select-keys (apply p/sh {:dir project :in "" :extra-env without-user-git-config} "bb" %&) [:exit :out :err])]
+       (let [{:keys [exit out err]} (bb "worktree" "config")]
+         (is (zero? exit) err)
+         (is (str/includes? out ":ports")))
+       (let [{:keys [exit out err]} (bb "worktree" "prepare" "x" "pez/x" "--new-branch")]
+         (is (zero? exit) (str out err))
+         (is (fs/exists? (fs/path project "worktrees" "x"))))
+       (is (zero? (:exit (bb "lock" "demo" "--" "true"))) "lock from the project's own bb.edn")
+       (is (zero? (:exit (bb "claim" "take" "shared" "agent-a"))) "claim from the project's own bb.edn")))))
