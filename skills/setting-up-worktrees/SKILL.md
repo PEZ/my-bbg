@@ -161,7 +161,7 @@ A worktree runs the project's tasks as its own branch has them, while `worktrees
 2. `bbg worktree prepare <name> <branch> --new-branch` prepares a worktree, and `bbg worktree port <port-name> --worktree <name>` gives its port.
 3. Start the worktree from the VS Code part's task, and check that its processes run on the worktree's ports, and that Calva has the worktree's sessions while the main checkout's stay as they were.
 4. From an agent, start a worktree through the Joyride function, and poll its status until it runs.
-5. Stop it from its task, and `bbg worktree remove <name>` it. Remove lists what goes and asks first.
+5. Stop it from its task, and `bbg worktree remove <name>` it. Remove lists what goes, and asks first only when that loses uncommitted changes or commits on no other branch or remote.
 6. Run the locked task from two checkouts at once, and see them take turns.
 
 Then give PEZ the same steps as a walkthrough to try himself.
@@ -180,7 +180,7 @@ The shared parts get better from each project that uses them. When you had to wo
 worktree prepare <name> <ref> [--new-branch] [--detach]   ; --detach is for the control
 worktree check <name> <ref> [--new-branch] [--detach]     ; prints why prepare would refuse, or nothing
 worktree stop <name>
-worktree remove <name>                                    ; lists what goes, asks
+worktree remove <name> [--force]                          ; lists what goes, asks when work would be lost, unless --force
 worktree items worktree|control|running                   ; EDN for pickers
 worktree port [<port-name>] [--worktree <name>]           ; the port name is needed when there are several
 worktree name <branch>                                    ; the name a branch's worktree gets, or why none can

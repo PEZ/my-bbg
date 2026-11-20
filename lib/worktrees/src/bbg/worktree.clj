@@ -14,6 +14,7 @@
 (def cli-spec
   {:coerce {:new-branch :boolean
             :detach :boolean
+            :force :boolean
             :worktree :string}})
 
 (def usage
@@ -21,7 +22,7 @@
                   "  prepare <name> <ref> [--new-branch] [--detach]"
                   "  check <name> <ref> [--new-branch] [--detach]"
                   "  stop <name>"
-                  "  remove <name>"
+                  "  remove <name> [--force]"
                   "  items worktree|control|running"
                   "  port [<port-name>] [--worktree <name>]"
                   "  name <branch>"
@@ -163,10 +164,21 @@
     :else ["git" "-C" source "worktree" "add" path git-ref]))
 
 (defn removal-args
-  "Returns the git commands that remove the worktree at `path` from `source`, and then delete its `branch` when it has one. The worktree removal refuses when the worktree has changes git would lose."
-  [{:keys [source path branch]}]
-  (cond-> [["git" "-C" source "worktree" "remove" path]]
+  "Returns the git commands that remove the worktree at `path` from `source`, and then delete its `branch` when it has one. Git refuses the removal while the worktree has changes it hasn't committed, unless `discard-changes?`."
+  [{:keys [source path branch discard-changes?]}]
+  (cond-> [(into ["git" "-C" source "worktree" "remove"] (if discard-changes? ["--force" path] [path]))]
     branch (conj ["git" "-C" source "branch" "-D" branch])))
+
+(defn only-here-args
+  "Returns the git command, run in `source`, that lists the commits on `branch` that are on no other branch and on no remote. For `--branches`, git matches `--exclude` against the branch name without `refs/heads/`."
+  [source branch]
+  ["git" "-C" source "log" "--oneline" branch "--not" (str "--exclude=" branch) "--branches" "--remotes" "--"])
+
+(defn ask-before-removal?
+  "True when removing a worktree loses `changes` git hasn't committed or commits `only-here`, on no other branch or remote, and the removal isn't `force?`d."
+  [{:keys [changes only-here force?]}]
+  (and (not force?)
+       (boolean (or (seq changes) (seq only-here)))))
 
 ;; Preparing a checkout
 
@@ -478,10 +490,18 @@
 (defn- yes? [answer]
   (contains? #{"y" "yes"} (str/lower-case (str/trim (str answer)))))
 
-(defn- print-removal [{worktree-name :name :keys [path branch pids only-here]}]
+(defn- confirmed? [question]
+  (print question)
+  (flush)
+  (yes? (read-line)))
+
+(defn- print-removal [{worktree-name :name :keys [path branch pids changes only-here]}]
   (println "This removes the worktree" worktree-name "in" path "and its entry in the registry")
   (when (seq pids)
     (println "Its processes run, pids" (str/join " " pids) "- they are stopped first."))
+  (when (seq changes)
+    (println "It has changes git hasn't committed, and they are discarded:")
+    (println changes))
   (when branch
     (println "It also deletes the branch" branch)
     (if (seq only-here)
@@ -490,31 +510,28 @@
       (println "Every commit on it is also on another branch or on a remote."))))
 
 (defn remove!
-  "Removes the worktree `name`: stops its processes, removes the git worktree and its folder, deletes its branch, and drops its registry entry, after listing what goes and asking. Refuses while the worktree has changes git hasn't committed."
-  [{:worktree/keys [source] :as config} worktree-name]
+  "Removes the worktree `name`: stops its processes, removes the git worktree and its folder, deletes its branch, and drops its registry entry. When that loses changes git hasn't committed, or commits on no other branch or remote, it lists them and asks first, unless `force?`."
+  [{:worktree/keys [source] :as config} worktree-name {:keys [force?]}]
   (when (str/blank? worktree-name)
-    (fail "Usage: worktree remove <name>" {}))
-  (let [path (check-existing-worktree config worktree-name)]
-    (when-let [changes (not-empty (sh-out "git" "-C" path "status" "--porcelain"))]
-      (fail (str "The worktree " worktree-name " has changes git hasn't committed. Commit or discard them first:\n" changes) {:name worktree-name}))
-    (let [branch (not-empty (sh-out "git" "-C" path "branch" "--show-current"))
-          info {:name worktree-name
-                :path path
-                :branch branch
-                :pids (mapv :pid (worktree-listeners config worktree-name))
-                :only-here (when branch
-                             (sh-out "git" "-C" source "log" "--oneline" branch
-                                     "--not" (str "--exclude=refs/heads/" branch) "--branches" "--remotes" "--"))}]
-      (print-removal info)
-      (print "Remove it? [y/N] ")
-      (flush)
-      (if-not (yes? (read-line))
-        (println "Nothing removed.")
-        (do (stop! config worktree-name)
-            (doseq [args (removal-args {:source source :path path :branch branch})]
-              (apply p/shell args))
-            (write-registry! config (read-registry config))
-            (println "The worktree" worktree-name "is removed."))))))
+    (fail "Usage: worktree remove <name> [--force]" {}))
+  (let [path (check-existing-worktree config worktree-name)
+        branch (not-empty (sh-out "git" "-C" path "branch" "--show-current"))
+        info {:name worktree-name
+              :path path
+              :branch branch
+              :changes (not-empty (sh-out "git" "-C" path "status" "--porcelain"))
+              :pids (mapv :pid (worktree-listeners config worktree-name))
+              :only-here (when branch (apply sh-out (only-here-args source branch)))
+              :force? force?}]
+    (print-removal info)
+    (if (and (ask-before-removal? info) (not (confirmed? "Remove it? [y/N] ")))
+      (println "Nothing removed.")
+      (do (stop! config worktree-name)
+          (doseq [args (removal-args {:source source :path path :branch branch
+                                      :discard-changes? (boolean (:changes info))})]
+            (apply p/shell args))
+          (write-registry! config (read-registry config))
+          (println "The worktree" worktree-name "is removed.")))))
 
 (defn running?
   "True when the worktree `worktree-name` has a process listening on its ports from its folder, or one on its registry ports that is shutting down. Throws with exit code 2 when there is no such worktree."
@@ -543,7 +560,7 @@
       "check" (some-> (check config (args->opts args)) println)
       "stop" (when-not (stop! config arg)
                (println "No processes of worktree" arg "were running."))
-      "remove" (remove! config arg)
+      "remove" (remove! config arg {:force? (:force opts)})
       "items" (prn (picker-data config (some-> arg keyword)))
       "port" (println (port config (cwd) {:port-name arg :worktree (:worktree opts)}))
       "running" (if (running? config arg)

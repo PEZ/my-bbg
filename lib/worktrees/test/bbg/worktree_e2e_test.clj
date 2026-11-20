@@ -160,17 +160,22 @@
          (is (str/includes? (:out (bbg project "worktree" "check" "x")) "Usage") "check without a ref")
          (is (pos? (:exit (bbg project "worktree" "items"))) "items without a picker")
          (spit (str (fs/path x "new.txt")) "x")
-         (let [{:keys [exit out err]} (bbg project "worktree" "remove" "x")]
-           (is (pos? exit) "Uncommitted changes refuse removal")
-           (is (str/includes? (str out err) "changes git hasn't committed")))
-         (fs/delete (fs/path x "new.txt"))
          (let [{:keys [out]} (bbg-in project "n\n" "worktree" "remove" "x")]
-           (is (str/includes? out "Nothing removed."))
+           (is (str/includes? out "changes git hasn't committed") "Uncommitted changes are listed")
+           (is (str/includes? out "Nothing removed.") "and asked about, and a no keeps the worktree")
            (is (fs/exists? x)))
-         (let [{:keys [exit out]} (bbg-in project "y\n" "worktree" "remove" "x")]
+         (git! x "add" "new.txt")
+         (git! x "commit" "-q" "-m" "only here")
+         (let [{:keys [out]} (bbg-in project "n\n" "worktree" "remove" "x")]
+           (is (str/includes? out "go with it") "A commit on no other branch or remote is listed")
+           (is (str/includes? out "Nothing removed.") "and asked about")
+           (is (fs/exists? x)))
+         (spit (str (fs/path x "other.txt")) "x")
+         (let [{:keys [exit out]} (bbg project "worktree" "remove" "x" "--force")]
            (is (zero? exit) out)
+           (is (not (str/includes? out "Remove it?")) "--force removes without asking")
            (is (str/includes? out "deletes the branch pez/x"))
-           (is (not (fs/exists? x)) "The folder is gone")
+           (is (not (fs/exists? x)) "The folder is gone, its uncommitted change with it")
            (is (not (contains? (registry project) "x")) "The registry entry is gone")
            (is (str/blank? (:out (p/sh {:dir project} "git" "branch" "--list" "pez/x"))) "The branch is gone")))))))
 
@@ -202,8 +207,9 @@
            "The worktree shows nothing untracked")
        (is (= (str port) (str/trim (:out (bbg (str x "/") "worktree" "port"))))
            "port from inside a worktree of the dev-repo layout")
-       (let [{:keys [exit out err]} (bbg-in dev "y\n" "worktree" "remove" "x")]
+       (let [{:keys [exit out err]} (bbg dev "worktree" "remove" "x")]
          (is (zero? exit) (str out err))
+         (is (not (str/includes? out "Remove it?")) "A worktree that loses nothing is removed without asking")
          (is (not (fs/exists? x)) "A worktree with Claude Code links is removed"))))))
 
 (defn- small-project!

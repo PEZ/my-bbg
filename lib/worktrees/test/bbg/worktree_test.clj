@@ -119,7 +119,23 @@
       "A worktree on a branch: the worktree, then its branch")
   (is (= [["git" "-C" "/s" "worktree" "remove" "/x/control"]]
          (worktree/removal-args {:source "/s" :path "/x/control" :branch nil}))
-      "The control, detached, has no branch to delete"))
+      "The control, detached, has no branch to delete")
+  (is (= [["git" "-C" "/s" "worktree" "remove" "--force" "/x/x"]
+          ["git" "-C" "/s" "branch" "-D" "spike/x"]]
+         (worktree/removal-args {:source "/s" :path "/x/x" :branch "spike/x" :discard-changes? true}))
+      "Changes git hasn't committed are discarded with git's own --force"))
+
+(deftest asking-before-removal
+  (is (false? (worktree/ask-before-removal? {:changes nil :only-here nil}))
+      "Nothing would be lost, so nothing is asked")
+  (is (false? (worktree/ask-before-removal? {:changes nil :only-here ""}))
+      "A branch with no commits of its own loses nothing")
+  (is (true? (worktree/ask-before-removal? {:changes "?? new.txt" :only-here nil}))
+      "Uncommitted changes are asked about")
+  (is (true? (worktree/ask-before-removal? {:changes nil :only-here "abc123 only here"}))
+      "Commits on no other branch or remote are asked about")
+  (is (false? (worktree/ask-before-removal? {:changes "?? new.txt" :only-here "abc123 only here" :force? true}))
+      "--force removes without asking"))
 
 (deftest sharing-a-folder
   (is (= [:keep] (worktree/share-steps {:same? true :state :link}))
@@ -226,3 +242,8 @@
   (is (= {:name "control" :ref "origin/main" :detach? true :new-branch? false}
          (worktree/args->opts ["--detach" "control" "origin/main"]))
       "Flags before the name"))
+
+(deftest commits-only-on-a-branch
+  (is (= ["git" "-C" "/s" "log" "--oneline" "pez/x" "--not" "--exclude=pez/x" "--branches" "--remotes" "--"]
+         (worktree/only-here-args "/s" "pez/x"))
+      "The branch leaves itself out by its name, as --branches matches it"))

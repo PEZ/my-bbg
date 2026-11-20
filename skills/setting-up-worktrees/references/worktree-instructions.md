@@ -23,7 +23,7 @@ When a project gets worktrees, its agent writes the project's instructions for w
 - **Starting a worktree from an agent.** Name the Joyride functions (`start-branch!` with or without a new branch, and `start-control-at!` when the project has a control), say that they return at once, and say to poll `start-status` about once a minute. Say what to do when it fails, such as running `bbg worktree prepare` in a terminal to see git's or npm's reason.
 - **Leaving running worktrees alone.** Say that a worktree that already runs is used as it is. Say to ask the human before stopping or restarting one someone else may be working in, the control included.
 - **Stopping.** Say that an agent stops a worktree it started for a short check, and that one it started for work it hands off keeps running and is named in the handoff.
-- **Removing.** Say that removal is the human's, and that the handoff names the `bbg worktree remove <name>` command rather than spelling out git steps.
+- **Removing.** Say that an agent removes a worktree when the human asks, with `bbg worktree remove <name>`. When removing would lose changes git hasn't committed, or commits on no other branch or remote, the command lists them and asks, and the agent tells the human what would be lost and passes `--force` only when the human asks to force it. A handoff that leaves a worktree to clean up names the command rather than spelling out git steps.
 - **The cost.** Say roughly what a worktree costs (a JVM, a build watch, browser pages) and how many fit next to the main checkout, so agents don't leave worktrees running for nothing.
 
 ## Taking turns and shared data
